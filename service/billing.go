@@ -3,9 +3,9 @@ package service
 import (
 	"fmt"
 
-	"github.com/QuantumNous/new-api/logger"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/Jwell-ai/jwell-api/logger"
+	relaycommon "github.com/Jwell-ai/jwell-api/relay/common"
+	"github.com/Jwell-ai/jwell-api/types"
 	"github.com/gin-gonic/gin"
 )
 

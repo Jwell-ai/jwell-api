@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/relay/channel/openrouter"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relay/reasonmap"
+	"github.com/Jwell-ai/jwell-api/common"
+	"github.com/Jwell-ai/jwell-api/constant"
+	"github.com/Jwell-ai/jwell-api/dto"
+	"github.com/Jwell-ai/jwell-api/relay/channel/openrouter"
+	relaycommon "github.com/Jwell-ai/jwell-api/relay/common"
+	"github.com/Jwell-ai/jwell-api/relay/reasonmap"
 	"github.com/samber/lo"
 )
 

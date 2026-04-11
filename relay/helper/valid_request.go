@@ -7,11 +7,11 @@ import (
 	"math"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/Jwell-ai/jwell-api/common"
+	"github.com/Jwell-ai/jwell-api/dto"
+	"github.com/Jwell-ai/jwell-api/logger"
+	relayconstant "github.com/Jwell-ai/jwell-api/relay/constant"
+	"github.com/Jwell-ai/jwell-api/types"
 	"github.com/samber/lo"
 
 	"github.com/gin-gonic/gin"

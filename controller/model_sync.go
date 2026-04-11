@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
+	"github.com/Jwell-ai/jwell-api/common"
+	"github.com/Jwell-ai/jwell-api/model"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"

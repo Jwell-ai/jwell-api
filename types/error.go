@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
+	"github.com/Jwell-ai/jwell-api/common"
 )
 
 type OpenAIError struct {

@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/Jwell-ai/jwell-api/common"
+	"github.com/Jwell-ai/jwell-api/dto"
+	relaycommon "github.com/Jwell-ai/jwell-api/relay/common"
+	"github.com/Jwell-ai/jwell-api/service"
+	"github.com/Jwell-ai/jwell-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"

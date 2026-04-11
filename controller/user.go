@@ -10,15 +10,15 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/i18n"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting"
+	"github.com/Jwell-ai/jwell-api/common"
+	"github.com/Jwell-ai/jwell-api/dto"
+	"github.com/Jwell-ai/jwell-api/i18n"
+	"github.com/Jwell-ai/jwell-api/logger"
+	"github.com/Jwell-ai/jwell-api/model"
+	"github.com/Jwell-ai/jwell-api/service"
+	"github.com/Jwell-ai/jwell-api/setting"
 
-	"github.com/QuantumNous/new-api/constant"
+	"github.com/Jwell-ai/jwell-api/constant"
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"

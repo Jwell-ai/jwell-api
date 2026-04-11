@@ -1,10 +1,10 @@
 package controller
 
 import (
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/Jwell-ai/jwell-api/common"
+	"github.com/Jwell-ai/jwell-api/model"
+	"github.com/Jwell-ai/jwell-api/service"
+	"github.com/Jwell-ai/jwell-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )

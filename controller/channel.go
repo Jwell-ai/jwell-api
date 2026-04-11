@@ -9,14 +9,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/model"
-	relaychannel "github.com/QuantumNous/new-api/relay/channel"
-	"github.com/QuantumNous/new-api/relay/channel/gemini"
-	"github.com/QuantumNous/new-api/relay/channel/ollama"
-	"github.com/QuantumNous/new-api/service"
+	"github.com/Jwell-ai/jwell-api/common"
+	"github.com/Jwell-ai/jwell-api/constant"
+	"github.com/Jwell-ai/jwell-api/dto"
+	"github.com/Jwell-ai/jwell-api/model"
+	relaychannel "github.com/Jwell-ai/jwell-api/relay/channel"
+	"github.com/Jwell-ai/jwell-api/relay/channel/gemini"
+	"github.com/Jwell-ai/jwell-api/relay/channel/ollama"
+	"github.com/Jwell-ai/jwell-api/service"
 
 	"github.com/gin-gonic/gin"
 )

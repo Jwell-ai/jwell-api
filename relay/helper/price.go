@@ -3,12 +3,12 @@ package helper
 import (
 	"fmt"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/logger"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/Jwell-ai/jwell-api/common"
+	"github.com/Jwell-ai/jwell-api/logger"
+	relaycommon "github.com/Jwell-ai/jwell-api/relay/common"
+	"github.com/Jwell-ai/jwell-api/setting/operation_setting"
+	"github.com/Jwell-ai/jwell-api/setting/ratio_setting"
+	"github.com/Jwell-ai/jwell-api/types"
 
 	"github.com/gin-gonic/gin"
 )

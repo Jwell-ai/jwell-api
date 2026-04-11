@@ -1,11 +1,11 @@
 package router
 
 import (
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/controller"
-	"github.com/QuantumNous/new-api/middleware"
-	"github.com/QuantumNous/new-api/relay"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/Jwell-ai/jwell-api/constant"
+	"github.com/Jwell-ai/jwell-api/controller"
+	"github.com/Jwell-ai/jwell-api/middleware"
+	"github.com/Jwell-ai/jwell-api/relay"
+	"github.com/Jwell-ai/jwell-api/types"
 
 	"github.com/gin-gonic/gin"
 )

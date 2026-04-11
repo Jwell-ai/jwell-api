@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/i18n"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/model"
+	"github.com/Jwell-ai/jwell-api/common"
+	"github.com/Jwell-ai/jwell-api/i18n"
+	"github.com/Jwell-ai/jwell-api/logger"
+	"github.com/Jwell-ai/jwell-api/model"
 	"github.com/gin-gonic/gin"
 )
 

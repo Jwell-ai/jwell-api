@@ -3,10 +3,10 @@ package controller
 import (
 	"net/http"
 
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/Jwell-ai/jwell-api/model"
+	"github.com/Jwell-ai/jwell-api/service"
+	"github.com/Jwell-ai/jwell-api/setting"
+	"github.com/Jwell-ai/jwell-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
