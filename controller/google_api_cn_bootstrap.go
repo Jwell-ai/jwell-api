@@ -84,7 +84,7 @@ func loadGoogleAPICNBootstrapConfig() (googleAPICNBootstrapConfig, bool) {
 	}
 	pricingURL := strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_PRICING_URL", ""))
 	if pricingURL == "" {
-		pricingURL = authBaseURL + "/pricing"
+		pricingURL = authBaseURL + "/api/pricing"
 	}
 	if strings.HasPrefix(pricingURL, "/") {
 		pricingURL = authBaseURL + pricingURL
