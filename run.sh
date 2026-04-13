@@ -16,7 +16,7 @@ APP_LOG="${APP_LOG:-$LOG_DIR/$APP_NAME.out.log}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 
 show_help() {
-    echo "Usage: $0 {start|stop|restart|status|tail|build|update|help}"
+    echo "Usage: $0 {start|stop|restart|status|tail|build|build-all|build-frontend|update|update-all|help}"
     echo ""
     echo "Commands:"
     echo "  start    - 启动服务"
@@ -24,8 +24,11 @@ show_help() {
     echo "  restart  - 重启服务"
     echo "  status   - 查看服务状态"
     echo "  tail     - 查看启动输出日志"
-    echo "  build    - 执行 make all 构建前端和后端二进制"
-    echo "  update   - 先停止，执行 make all，再启动"
+    echo "  build    - 执行 make build-backend，仅构建后端二进制"
+    echo "  build-all - 执行 make all，构建前端并嵌入后端二进制"
+    echo "  build-frontend - 执行 make build-frontend，仅构建前端"
+    echo "  update   - 先停止，执行 make build-backend，再启动"
+    echo "  update-all - 先停止，执行 make all，再启动"
     echo "  help     - 显示帮助信息"
     echo ""
     echo "Environment overrides:"
@@ -44,7 +47,7 @@ show_help() {
 check_executable() {
     if [ ! -f "$EXECUTABLE_PATH" ]; then
         echo "Error: 可执行文件不存在: $EXECUTABLE_PATH"
-        echo "请先执行: make all"
+        echo "请先执行: make build-backend，或需要单体部署时执行 make all"
         exit 1
     fi
     if [ ! -x "$EXECUTABLE_PATH" ]; then
@@ -146,13 +149,32 @@ show_status() {
 build_service() {
     echo "开始构建服务..."
     cd "$SCRIPT_DIR"
+    make build-backend
+}
+
+build_all_service() {
+    echo "开始构建前端和嵌入式后端..."
+    cd "$SCRIPT_DIR"
     make all
+}
+
+build_frontend() {
+    echo "开始构建前端..."
+    cd "$SCRIPT_DIR"
+    make build-frontend
 }
 
 update_service() {
     echo "开始更新服务..."
     stop_service
     build_service
+    start_service
+}
+
+update_all_service() {
+    echo "开始更新前端和嵌入式后端..."
+    stop_service
+    build_all_service
     start_service
 }
 
@@ -183,8 +205,17 @@ case "${1:-help}" in
     build)
         build_service
         ;;
+    build-all)
+        build_all_service
+        ;;
+    build-frontend)
+        build_frontend
+        ;;
     update)
         update_service
+        ;;
+    update-all)
+        update_all_service
         ;;
     help|--help|-h)
         show_help

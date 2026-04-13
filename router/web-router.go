@@ -1,7 +1,7 @@
 package router
 
 import (
-	"embed"
+	"io/fs"
 	"net/http"
 	"strings"
 
@@ -13,7 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func SetWebRouter(router *gin.Engine, buildFS embed.FS, indexPage []byte) {
+func SetWebRouter(router *gin.Engine, buildFS fs.FS, indexPage []byte) {
 	router.Use(gzip.Gzip(gzip.DefaultCompression))
 	router.Use(middleware.GlobalWebRateLimit())
 	router.Use(middleware.Cache())

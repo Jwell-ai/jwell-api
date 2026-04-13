@@ -1,35 +1,48 @@
 package router
 
 import (
-	"embed"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"strings"
 
 	"github.com/Jwell-ai/jwell-api/common"
+	"github.com/Jwell-ai/jwell-api/controller"
 	"github.com/Jwell-ai/jwell-api/middleware"
 
 	"github.com/gin-gonic/gin"
 )
 
-func SetRouter(router *gin.Engine, buildFS embed.FS, indexPage []byte) {
+func SetRouter(router *gin.Engine, buildFS fs.FS, indexPage []byte) {
 	SetApiRouter(router)
 	SetDashboardRouter(router)
 	SetRelayRouter(router)
 	SetVideoRouter(router)
 	frontendBaseUrl := os.Getenv("FRONTEND_BASE_URL")
-	if common.IsMasterNode && frontendBaseUrl != "" {
+	hasEmbeddedFrontend := buildFS != nil && len(indexPage) > 0
+	if common.IsMasterNode && frontendBaseUrl != "" && hasEmbeddedFrontend {
 		frontendBaseUrl = ""
 		common.SysLog("FRONTEND_BASE_URL is ignored on master node")
 	}
-	if frontendBaseUrl == "" {
+	if frontendBaseUrl == "" && hasEmbeddedFrontend {
 		SetWebRouter(router, buildFS, indexPage)
 	} else {
+		setExternalWebRouter(router, frontendBaseUrl)
+	}
+}
+
+func setExternalWebRouter(router *gin.Engine, frontendBaseUrl string) {
+	if frontendBaseUrl != "" {
 		frontendBaseUrl = strings.TrimSuffix(frontendBaseUrl, "/")
 		router.NoRoute(func(c *gin.Context) {
 			c.Set(middleware.RouteTagKey, "web")
 			c.Redirect(http.StatusMovedPermanently, fmt.Sprintf("%s%s", frontendBaseUrl, c.Request.RequestURI))
 		})
+		return
 	}
+	router.NoRoute(func(c *gin.Context) {
+		c.Set(middleware.RouteTagKey, "web")
+		controller.RelayNotFound(c)
+	})
 }
