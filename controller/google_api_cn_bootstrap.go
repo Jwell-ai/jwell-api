@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	googleAPICNDefaultAPIBaseURL  = "https://future-api.vodeshop.com"
+	googleAPICNDefaultAPIBaseURL  = "https://gemini-api.cn"
 	googleAPICNDefaultAuthBaseURL = "https://google-api.cn"
 	googleAPICNDefaultName        = "google-api.cn"
 	googleAPICNDefaultTag         = "google-api-cn"
