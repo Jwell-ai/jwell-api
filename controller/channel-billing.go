@@ -459,7 +459,6 @@ func GetGoogleAPICNUpstreamAccount(c *gin.Context) {
 		Where("tag = ? OR base_url = ? OR base_url = ?", cfg.Tag, cfg.BaseURL, cfg.AuthBaseURL).
 		Order("id asc").
 		First(&channel).Error; err == nil {
-		key = channel.Key
 		proxy = channel.GetSetting().Proxy
 		if channel.BaseURL != nil {
 			channelBaseURL := strings.TrimRight(strings.TrimSpace(channel.GetBaseURL()), "/")
@@ -495,7 +494,11 @@ func GetGoogleAPICNUpstreamAccount(c *gin.Context) {
 }
 
 func fetchGoogleAPICNUpstreamAccount(ctx context.Context, cfg googleAPICNBootstrapConfig, key string, proxy string) (GoogleAPICNUpstreamAccountResponse, error) {
-	subscriptionURL := fmt.Sprintf("%s/v1/dashboard/billing/subscription", cfg.BaseURL)
+	accountBaseURL := cfg.AuthBaseURL
+	if accountBaseURL == "" {
+		accountBaseURL = cfg.BaseURL
+	}
+	subscriptionURL := fmt.Sprintf("%s/v1/dashboard/billing/subscription", accountBaseURL)
 	subscriptionBody, err := getResponseBodyWithContext(ctx, http.MethodGet, subscriptionURL, proxy, GetAuthHeader(key))
 	if err != nil {
 		return GoogleAPICNUpstreamAccountResponse{}, err
@@ -511,7 +514,7 @@ func fetchGoogleAPICNUpstreamAccount(ctx context.Context, cfg googleAPICNBootstr
 	if !subscription.HasPaymentMethod {
 		startDate = now.AddDate(0, 0, -100).Format("2006-01-02")
 	}
-	usageURL := fmt.Sprintf("%s/v1/dashboard/billing/usage?start_date=%s&end_date=%s", cfg.BaseURL, startDate, endDate)
+	usageURL := fmt.Sprintf("%s/v1/dashboard/billing/usage?start_date=%s&end_date=%s", accountBaseURL, startDate, endDate)
 	usageBody, err := getResponseBodyWithContext(ctx, http.MethodGet, usageURL, proxy, GetAuthHeader(key))
 	if err != nil {
 		return GoogleAPICNUpstreamAccountResponse{}, err

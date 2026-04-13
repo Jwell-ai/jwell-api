@@ -172,7 +172,11 @@ func syncGoogleAPICNChannel(ctx context.Context, channel *model.Channel, cfg goo
 		return nil
 	}
 
-	shouldOwnChannelKey := channel.GetTag() == cfg.Tag || strings.TrimSpace(channel.Key) == ""
+	channelBaseURL := strings.TrimRight(strings.TrimSpace(channel.GetBaseURL()), "/")
+	shouldOwnChannelKey := channel.GetTag() == cfg.Tag ||
+		channelBaseURL == cfg.BaseURL ||
+		channelBaseURL == cfg.AuthBaseURL ||
+		strings.TrimSpace(channel.Key) == ""
 	if shouldOwnChannelKey {
 		channel.Key = key
 	}
