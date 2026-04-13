@@ -82,6 +82,18 @@ func TestResolveNewAPIUpstreamAuthTokenIgnoresPlainKey(t *testing.T) {
 	require.Equal(t, "sk-plain", token)
 }
 
+func TestNewAPIUpstreamAuthTokenDebugSummaryDoesNotLeakToken(t *testing.T) {
+	t.Parallel()
+
+	token := "sk-test-secret-token"
+	summary := NewAPIUpstreamAuthTokenDebugSummary(token)
+
+	require.Contains(t, summary, "len=20")
+	require.Contains(t, summary, "masked=sk-tes...oken")
+	require.Contains(t, summary, "sha256_prefix=")
+	require.NotContains(t, summary, token)
+}
+
 func TestResolveNewAPIUpstreamAuthTokenUsesSeparateAuthBaseURL(t *testing.T) {
 	t.Parallel()
 

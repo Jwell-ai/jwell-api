@@ -27,7 +27,7 @@ export const useNavigation = (t, docsLink, headerNavModules) => {
       console: true,
       pricing: true,
       docs: true,
-      about: true,
+      about: false,
     };
 
     // 使用传入的配置或默认配置

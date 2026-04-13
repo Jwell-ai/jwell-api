@@ -23,6 +23,8 @@ const (
 	defaultNewAPIUpstreamTokenName  = "jwell-api-upstream"
 	defaultNewAPIUpstreamTokenGroup = "default"
 	newAPIUpstreamTokenCacheTTL     = 30 * time.Minute
+	newAPIUpstreamAuthDebugEnv      = "NEWAPI_UPSTREAM_AUTH_DEBUG"
+	googleAPICNAuthDebugEnv         = "GOOGLE_API_CN_DEBUG_AUTH_TOKEN"
 )
 
 type NewAPIUpstreamAuthConfig struct {
@@ -149,6 +151,7 @@ func ResolveNewAPIUpstreamAuthToken(ctx context.Context, baseURL string, rawKey 
 	if cached, exists := newAPIUpstreamTokenCache[cacheKey]; exists && time.Now().Before(cached.expiresAt) && cached.token != "" {
 		token := cached.token
 		newAPIUpstreamTokenCacheMu.Unlock()
+		LogNewAPIUpstreamAuthTokenDebug("cache", baseURL, authBaseURL, cfg, token)
 		return token, true, nil
 	}
 	newAPIUpstreamTokenCacheMu.Unlock()
@@ -165,7 +168,48 @@ func ResolveNewAPIUpstreamAuthToken(ctx context.Context, baseURL string, rawKey 
 	if err != nil {
 		return "", true, err
 	}
+	LogNewAPIUpstreamAuthTokenDebug("fetch", baseURL, authBaseURL, cfg, token)
 	return token, true, nil
+}
+
+func LogNewAPIUpstreamAuthTokenDebug(source string, apiBaseURL string, authBaseURL string, cfg NewAPIUpstreamAuthConfig, token string) {
+	if !newAPIUpstreamAuthDebugEnabled() {
+		return
+	}
+	common.SysLog(fmt.Sprintf(
+		"newapi upstream auth token debug: source=%s profile=%s api_base_url=%s auth_base_url=%s token_name=%s token=%s",
+		source,
+		cfg.Profile,
+		strings.TrimRight(strings.TrimSpace(apiBaseURL), "/"),
+		strings.TrimRight(strings.TrimSpace(authBaseURL), "/"),
+		cfg.TokenName,
+		NewAPIUpstreamAuthTokenDebugSummary(token),
+	))
+}
+
+func NewAPIUpstreamAuthTokenDebugSummary(token string) string {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return "empty"
+	}
+	sum := sha256.Sum256([]byte(token))
+	return fmt.Sprintf("len=%d masked=%s sha256_prefix=%s", len(token), maskNewAPIUpstreamAuthToken(token), hex.EncodeToString(sum[:])[:16])
+}
+
+func newAPIUpstreamAuthDebugEnabled() bool {
+	return common.GetEnvOrDefaultBool(newAPIUpstreamAuthDebugEnv, false) ||
+		common.GetEnvOrDefaultBool(googleAPICNAuthDebugEnv, false)
+}
+
+func maskNewAPIUpstreamAuthToken(token string) string {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return ""
+	}
+	if len(token) <= 12 {
+		return strings.Repeat("*", len(token))
+	}
+	return token[:6] + "..." + token[len(token)-4:]
 }
 
 func InvalidateNewAPIUpstreamAuthToken(baseURL string, rawKey string) bool {
