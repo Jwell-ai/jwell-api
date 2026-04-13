@@ -1,0 +1,263 @@
+package controller
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/Jwell-ai/jwell-api/common"
+	"github.com/Jwell-ai/jwell-api/constant"
+	"github.com/Jwell-ai/jwell-api/model"
+	"github.com/Jwell-ai/jwell-api/service"
+	"gorm.io/gorm"
+)
+
+const (
+	googleAPICNDefaultAPIBaseURL  = "https://future-api.vodeshop.com"
+	googleAPICNDefaultAuthBaseURL = "https://google-api.cn"
+	googleAPICNDefaultName        = "google-api.cn"
+	googleAPICNDefaultTag         = "google-api-cn"
+	googleAPICNDefaultGroup       = "default"
+)
+
+type googleAPICNBootstrapConfig struct {
+	BaseURL         string
+	AuthBaseURL     string
+	Name            string
+	Tag             string
+	Group           string
+	BootstrapModels []string
+}
+
+// StartGoogleAPICNBootstrapTask creates or updates the shared google-api.cn
+// upstream channel when the platform-level upstream account is configured.
+func StartGoogleAPICNBootstrapTask() {
+	if !common.IsMasterNode {
+		return
+	}
+	if !common.GetEnvOrDefaultBool("GOOGLE_API_CN_AUTO_BOOTSTRAP_ENABLED", true) {
+		common.SysLog("google-api.cn bootstrap disabled by GOOGLE_API_CN_AUTO_BOOTSTRAP_ENABLED")
+		return
+	}
+
+	cfg, ok := loadGoogleAPICNBootstrapConfig()
+	if !ok {
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(common.GetEnvOrDefault("GOOGLE_API_CN_BOOTSTRAP_TIMEOUT_SECONDS", 60))*time.Second)
+		defer cancel()
+
+		if err := ensureGoogleAPICNChannel(ctx, cfg); err != nil {
+			common.SysError("google-api.cn bootstrap failed: " + err.Error())
+		}
+	}()
+}
+
+func loadGoogleAPICNBootstrapConfig() (googleAPICNBootstrapConfig, bool) {
+	username := strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_USERNAME", ""))
+	password := strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_PASSWORD", ""))
+	if username == "" || password == "" {
+		return googleAPICNBootstrapConfig{}, false
+	}
+
+	baseURL := strings.TrimRight(strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_API_BASE_URL", "")), "/")
+	if baseURL == "" {
+		baseURL = strings.TrimRight(strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_BASE_URL", "")), "/")
+	}
+	if baseURL == "" {
+		baseURL = googleAPICNDefaultAPIBaseURL
+	}
+	authBaseURL := strings.TrimRight(strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_AUTH_BASE_URL", googleAPICNDefaultAuthBaseURL)), "/")
+	if authBaseURL == "" {
+		authBaseURL = googleAPICNDefaultAuthBaseURL
+	}
+
+	return googleAPICNBootstrapConfig{
+		BaseURL:         baseURL,
+		AuthBaseURL:     authBaseURL,
+		Name:            strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_CHANNEL_NAME", googleAPICNDefaultName)),
+		Tag:             strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_CHANNEL_TAG", googleAPICNDefaultTag)),
+		Group:           strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_CHANNEL_GROUP", googleAPICNDefaultGroup)),
+		BootstrapModels: normalizeModelNames(strings.Split(common.GetEnvOrDefaultString("GOOGLE_API_CN_BOOTSTRAP_MODELS", ""), ",")),
+	}, true
+}
+
+func ensureGoogleAPICNChannel(ctx context.Context, cfg googleAPICNBootstrapConfig) error {
+	if cfg.Name == "" {
+		cfg.Name = googleAPICNDefaultName
+	}
+	if cfg.Tag == "" {
+		cfg.Tag = googleAPICNDefaultTag
+	}
+	if cfg.Group == "" {
+		cfg.Group = googleAPICNDefaultGroup
+	}
+	if cfg.AuthBaseURL == "" {
+		cfg.AuthBaseURL = googleAPICNDefaultAuthBaseURL
+	}
+
+	key, err := googleAPICNChannelKey(cfg.AuthBaseURL)
+	if err != nil {
+		return err
+	}
+
+	var channel model.Channel
+	err = model.DB.
+		Where("tag = ? OR base_url = ? OR base_url = ?", cfg.Tag, cfg.BaseURL, cfg.AuthBaseURL).
+		Order("id asc").
+		First(&channel).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return createGoogleAPICNChannel(ctx, cfg, key)
+	}
+
+	return syncGoogleAPICNChannel(ctx, &channel, cfg, key)
+}
+
+func googleAPICNChannelKey(authBaseURL string) (string, error) {
+	data, err := common.Marshal(service.NewAPIUpstreamAuthConfig{
+		Type:        service.NewAPIUpstreamAuthType,
+		Profile:     "google_api_cn",
+		AuthBaseURL: authBaseURL,
+	})
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func createGoogleAPICNChannel(ctx context.Context, cfg googleAPICNBootstrapConfig, key string) error {
+	channel := model.Channel{
+		Type:        constant.ChannelTypeOpenAI,
+		Key:         key,
+		Status:      common.ChannelStatusEnabled,
+		Name:        cfg.Name,
+		BaseURL:     common.GetPointer(cfg.BaseURL),
+		Group:       cfg.Group,
+		CreatedTime: common.GetTimestamp(),
+		Priority:    common.GetPointer[int64](0),
+		Weight:      common.GetPointer[uint](0),
+		AutoBan:     common.GetPointer(1),
+		Tag:         common.GetPointer(cfg.Tag),
+	}
+	setGoogleAPICNUpstreamModelSettings(&channel)
+
+	models, err := fetchGoogleAPICNModels(ctx, &channel)
+	if err != nil {
+		models = cfg.BootstrapModels
+		if len(models) == 0 {
+			return fmt.Errorf("fetch upstream models failed and GOOGLE_API_CN_BOOTSTRAP_MODELS is empty: %w", err)
+		}
+		common.SysError("google-api.cn model fetch failed, using GOOGLE_API_CN_BOOTSTRAP_MODELS: " + err.Error())
+	}
+	channel.Models = strings.Join(models, ",")
+
+	if err := channel.Insert(); err != nil {
+		return err
+	}
+	refreshChannelRuntimeCache()
+	common.SysLog(fmt.Sprintf("google-api.cn channel bootstrapped: channel_id=%d models=%d", channel.Id, len(models)))
+	return nil
+}
+
+func syncGoogleAPICNChannel(ctx context.Context, channel *model.Channel, cfg googleAPICNBootstrapConfig, key string) error {
+	if channel == nil {
+		return nil
+	}
+
+	shouldOwnChannelKey := channel.GetTag() == cfg.Tag || strings.TrimSpace(channel.Key) == ""
+	if shouldOwnChannelKey {
+		channel.Key = key
+	}
+	if channel.GetTag() == "" {
+		channel.Tag = common.GetPointer(cfg.Tag)
+	}
+	if channel.GetTag() == cfg.Tag || channel.BaseURL == nil || strings.TrimSpace(channel.GetBaseURL()) == "" || strings.TrimRight(strings.TrimSpace(channel.GetBaseURL()), "/") == cfg.AuthBaseURL {
+		channel.BaseURL = common.GetPointer(cfg.BaseURL)
+	}
+	if strings.TrimSpace(channel.Name) == "" {
+		channel.Name = cfg.Name
+	}
+	if strings.TrimSpace(channel.Group) == "" {
+		channel.Group = cfg.Group
+	}
+	setGoogleAPICNUpstreamModelSettings(channel)
+
+	models, err := fetchGoogleAPICNModels(ctx, channel)
+	if err != nil {
+		models = cfg.BootstrapModels
+		if len(models) == 0 {
+			return fmt.Errorf("fetch upstream models failed and GOOGLE_API_CN_BOOTSTRAP_MODELS is empty: %w", err)
+		}
+		common.SysError("google-api.cn model fetch failed, using GOOGLE_API_CN_BOOTSTRAP_MODELS: " + err.Error())
+	}
+
+	mergedModels := mergeModelNames(channel.GetModels(), models)
+	modelsChanged := strings.Join(normalizeModelNames(channel.GetModels()), ",") != strings.Join(mergedModels, ",")
+	channel.Models = strings.Join(mergedModels, ",")
+
+	updates := map[string]interface{}{
+		"name":     channel.Name,
+		"base_url": channel.GetBaseURL(),
+		"settings": channel.OtherSettings,
+	}
+	if channel.GetTag() != "" {
+		updates["tag"] = channel.GetTag()
+	}
+	if shouldOwnChannelKey {
+		updates["key"] = channel.Key
+	}
+	if channel.Group != "" {
+		updates["group"] = channel.Group
+	}
+	if modelsChanged {
+		updates["models"] = channel.Models
+	}
+
+	if err := model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Updates(updates).Error; err != nil {
+		return err
+	}
+	if modelsChanged {
+		if err := channel.UpdateAbilities(nil); err != nil {
+			return err
+		}
+	}
+	refreshChannelRuntimeCache()
+	common.SysLog(fmt.Sprintf("google-api.cn channel synced: channel_id=%d fetched_models=%d models_changed=%t", channel.Id, len(models), modelsChanged))
+	return nil
+}
+
+func setGoogleAPICNUpstreamModelSettings(channel *model.Channel) {
+	settings := channel.GetOtherSettings()
+	settings.UpstreamModelUpdateCheckEnabled = true
+	settings.UpstreamModelUpdateAutoSyncEnabled = true
+	channel.SetOtherSettings(settings)
+}
+
+func fetchGoogleAPICNModels(ctx context.Context, channel *model.Channel) ([]string, error) {
+	result := make(chan struct {
+		models []string
+		err    error
+	}, 1)
+	go func() {
+		models, err := fetchChannelUpstreamModelIDs(channel)
+		result <- struct {
+			models []string
+			err    error
+		}{models: models, err: err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case res := <-result:
+		return normalizeModelNames(res.models), res.err
+	}
+}

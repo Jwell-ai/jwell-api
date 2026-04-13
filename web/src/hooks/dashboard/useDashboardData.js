@@ -60,6 +60,8 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
   const [pieData, setPieData] = useState([{ type: 'null', value: '0' }]);
   const [lineData, setLineData] = useState([]);
   const [modelColors, setModelColors] = useState({});
+  const [upstreamAccountData, setUpstreamAccountData] = useState(null);
+  const [upstreamAccountLoading, setUpstreamAccountLoading] = useState(false);
 
   // ========== 图表状态 ==========
   const [activeChartTab, setActiveChartTab] = useState('1');
@@ -244,11 +246,34 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
     }
   }, [userDispatch]);
 
+  const loadUpstreamAccountData = useCallback(async () => {
+    if (!isAdminUser) return null;
+    setUpstreamAccountLoading(true);
+    try {
+      const res = await API.get('/api/channel/google_api_cn/account');
+      const { success, message, data } = res.data;
+      if (success) {
+        setUpstreamAccountData(data || null);
+        return data || null;
+      }
+      showError(message);
+      setUpstreamAccountData(null);
+      return null;
+    } catch (err) {
+      console.error(err);
+      setUpstreamAccountData(null);
+      return null;
+    } finally {
+      setUpstreamAccountLoading(false);
+    }
+  }, [isAdminUser]);
+
   const refresh = useCallback(async () => {
     const data = await loadQuotaData();
+    await loadUpstreamAccountData();
     await loadUptimeData();
     return data;
-  }, [loadQuotaData, loadUptimeData]);
+  }, [loadQuotaData, loadUpstreamAccountData, loadUptimeData]);
 
   const handleSearchConfirm = useCallback(
     async (updateChartDataCallback) => {
@@ -300,6 +325,8 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
     setLineData,
     modelColors,
     setModelColors,
+    upstreamAccountData,
+    upstreamAccountLoading,
 
     // 图表状态
     activeChartTab,
@@ -333,6 +360,7 @@ export const useDashboardData = (userState, userDispatch, statusState) => {
     handleCloseModal,
     loadQuotaData,
     loadUserQuotaData,
+    loadUpstreamAccountData,
     loadUptimeData,
     getUserData,
     refresh,

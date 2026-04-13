@@ -4,12 +4,11 @@ permissions:
   contents: read
 
 on:
-  workflow_dispatch:
-    inputs:
-      tag_name:
-        description: 'Release Tag to sync (e.g. v1.0.0)'
-        required: true
-        type: string
+  workflow_run:
+    workflows:
+      - "__disabled__"
+    types:
+      - completed
 
 # 配置你的 Gitee 仓库信息
 env:
@@ -88,4 +87,3 @@ jobs:
         run: |
           echo "✅ Successfully synced release ${{ github.event.inputs.tag_name }} to Gitee!"
           echo "🔗 Gitee Release URL: https://gitee.com/${{ env.GITEE_OWNER }}/${{ env.GITEE_REPO }}/releases/tag/${{ github.event.inputs.tag_name }}"
-

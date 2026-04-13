@@ -117,6 +117,9 @@ func main() {
 	// Channel upstream model update check task
 	controller.StartChannelUpstreamModelUpdateTask()
 
+	// google-api.cn shared upstream bootstrap
+	controller.StartGoogleAPICNBootstrapTask()
+
 	if common.IsMasterNode && constant.UpdateTask {
 		gopool.Go(func() {
 			controller.UpdateMidjourneyTaskBulk()

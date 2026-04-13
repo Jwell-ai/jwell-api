@@ -36,6 +36,11 @@ services:
 #      - GOOGLE_API_CN_PASSWORD=your-password  # google-api.cn 上游登录密码
 #      - GOOGLE_API_CN_TOKEN_NAME=jwell-api-upstream  # 上游自动创建/复用的令牌名称
 #      - GOOGLE_API_CN_GROUP=default  # 上游令牌分组
+#      - GOOGLE_API_CN_AUTO_BOOTSTRAP_ENABLED=true  # 自动创建/同步 google-api.cn 渠道
+#      - GOOGLE_API_CN_AUTH_BASE_URL=https://google-api.cn  # 登录/管理后台域名
+#      - GOOGLE_API_CN_API_BASE_URL=https://future-api.vodeshop.com  # 实际模型 API 域名
+#      - GOOGLE_API_CN_CHANNEL_GROUP=default  # 本平台渠道分组
+#      - GOOGLE_API_CN_BOOTSTRAP_MODELS=  # 上游模型拉取失败时的兜底模型列表，逗号分隔
 #      - STREAMING_TIMEOUT=300  # 流模式无响应超时时间，单位秒，默认120秒，如果出现空补全可以尝试改为更大值 （Streaming timeout in seconds, default is 120s. Increase if experiencing empty completions）
 #      - SESSION_SECRET=random_string  # 多机部署时设置，必须修改这个随机字符串！！ （multi-node deployment, set this to a random string!!!!!!!）
 #      - SYNC_FREQUENCY=60  # Uncomment if regular database syncing is needed

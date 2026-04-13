@@ -1,12 +1,14 @@
 package controller
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Jwell-ai/jwell-api/common"
@@ -19,6 +21,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // https://github.com/songquanpeng/one-api/issues/79
@@ -51,6 +54,19 @@ type OpenAIUsageResponse struct {
 	Object string `json:"object"`
 	//DailyCosts []OpenAIUsageDailyCost `json:"daily_costs"`
 	TotalUsage float64 `json:"total_usage"` // unit: 0.01 dollar
+}
+
+type GoogleAPICNUpstreamAccountResponse struct {
+	ChannelID        int     `json:"channel_id,omitempty"`
+	ChannelName      string  `json:"channel_name,omitempty"`
+	APIBaseURL       string  `json:"api_base_url"`
+	AuthBaseURL      string  `json:"auth_base_url"`
+	TotalUSD         float64 `json:"total_usd"`
+	UsedUSD          float64 `json:"used_usd"`
+	BalanceUSD       float64 `json:"balance_usd"`
+	AccessUntil      int64   `json:"access_until"`
+	HasPaymentMethod bool    `json:"has_payment_method"`
+	UpdatedAt        int64   `json:"updated_at"`
 }
 
 type OpenAISBUsageResponse struct {
@@ -419,6 +435,128 @@ func updateChannelBalance(channel *model.Channel) (float64, error) {
 	balance := subscription.HardLimitUSD - usage.TotalUsage/100
 	channel.UpdateBalance(balance)
 	return balance, nil
+}
+
+func GetGoogleAPICNUpstreamAccount(c *gin.Context) {
+	cfg, ok := loadGoogleAPICNBootstrapConfig()
+	if !ok {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "google-api.cn upstream account is not configured",
+		})
+		return
+	}
+
+	key, err := googleAPICNChannelKey(cfg.AuthBaseURL)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	proxy := ""
+	var channel model.Channel
+	if err = model.DB.
+		Where("tag = ? OR base_url = ? OR base_url = ?", cfg.Tag, cfg.BaseURL, cfg.AuthBaseURL).
+		Order("id asc").
+		First(&channel).Error; err == nil {
+		key = channel.Key
+		proxy = channel.GetSetting().Proxy
+		if channel.BaseURL != nil {
+			channelBaseURL := strings.TrimRight(strings.TrimSpace(channel.GetBaseURL()), "/")
+			if channelBaseURL != "" && channelBaseURL != cfg.AuthBaseURL {
+				cfg.BaseURL = channelBaseURL
+			}
+		}
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		common.ApiError(c, err)
+		return
+	}
+
+	realKey, resolved, err := service.ResolveNewAPIUpstreamAuthToken(c.Request.Context(), cfg.BaseURL, key, proxy)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if !resolved {
+		realKey = key
+	}
+
+	account, err := fetchGoogleAPICNUpstreamAccount(c.Request.Context(), cfg, realKey, proxy)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if channel.Id > 0 {
+		account.ChannelID = channel.Id
+		account.ChannelName = channel.Name
+		channel.UpdateBalance(account.BalanceUSD)
+	}
+	common.ApiSuccess(c, account)
+}
+
+func fetchGoogleAPICNUpstreamAccount(ctx context.Context, cfg googleAPICNBootstrapConfig, key string, proxy string) (GoogleAPICNUpstreamAccountResponse, error) {
+	subscriptionURL := fmt.Sprintf("%s/v1/dashboard/billing/subscription", cfg.BaseURL)
+	subscriptionBody, err := getResponseBodyWithContext(ctx, http.MethodGet, subscriptionURL, proxy, GetAuthHeader(key))
+	if err != nil {
+		return GoogleAPICNUpstreamAccountResponse{}, err
+	}
+	subscription := OpenAISubscriptionResponse{}
+	if err = common.Unmarshal(subscriptionBody, &subscription); err != nil {
+		return GoogleAPICNUpstreamAccountResponse{}, err
+	}
+
+	now := time.Now()
+	startDate := fmt.Sprintf("%s-01", now.Format("2006-01"))
+	endDate := now.Format("2006-01-02")
+	if !subscription.HasPaymentMethod {
+		startDate = now.AddDate(0, 0, -100).Format("2006-01-02")
+	}
+	usageURL := fmt.Sprintf("%s/v1/dashboard/billing/usage?start_date=%s&end_date=%s", cfg.BaseURL, startDate, endDate)
+	usageBody, err := getResponseBodyWithContext(ctx, http.MethodGet, usageURL, proxy, GetAuthHeader(key))
+	if err != nil {
+		return GoogleAPICNUpstreamAccountResponse{}, err
+	}
+	usage := OpenAIUsageResponse{}
+	if err = common.Unmarshal(usageBody, &usage); err != nil {
+		return GoogleAPICNUpstreamAccountResponse{}, err
+	}
+
+	usedUSD := usage.TotalUsage / 100
+	balanceUSD := subscription.HardLimitUSD - usedUSD
+	return GoogleAPICNUpstreamAccountResponse{
+		APIBaseURL:       cfg.BaseURL,
+		AuthBaseURL:      cfg.AuthBaseURL,
+		TotalUSD:         subscription.HardLimitUSD,
+		UsedUSD:          usedUSD,
+		BalanceUSD:       balanceUSD,
+		AccessUntil:      subscription.AccessUntil,
+		HasPaymentMethod: subscription.HasPaymentMethod,
+		UpdatedAt:        common.GetTimestamp(),
+	}, nil
+}
+
+func getResponseBodyWithContext(ctx context.Context, method string, url string, proxy string, headers http.Header) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, method, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	for k := range headers {
+		req.Header.Add(k, headers.Get(k))
+	}
+	client, err := service.NewProxyHttpClient(proxy)
+	if err != nil {
+		return nil, err
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
+		return nil, fmt.Errorf("status code: %d, body: %s", res.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return io.ReadAll(res.Body)
 }
 
 func UpdateChannelBalance(c *gin.Context) {

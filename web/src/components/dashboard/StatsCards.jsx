@@ -32,9 +32,13 @@ const StatsCards = ({
 }) => {
   const navigate = useNavigate();
   const { t } = useTranslation();
+  const gridClassName =
+    groupedStatsData.length > 4
+      ? 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4'
+      : 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4';
   return (
     <div className='mb-4'>
-      <div className='grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4'>
+      <div className={gridClassName}>
         {groupedStatsData.map((group, idx) => (
           <Card
             key={idx}

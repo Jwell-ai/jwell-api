@@ -29,11 +29,12 @@ import {
   IconTypograph,
   IconSend,
 } from '@douyinfe/semi-icons';
-import { renderQuota } from '../../helpers';
+import { renderQuota, renderQuotaWithAmount } from '../../helpers';
 import { createSectionTitle } from '../../helpers/dashboard';
 
 export const useDashboardStats = (
   userState,
+  upstreamAccountData,
   consumeQuota,
   consumeTokens,
   times,
@@ -42,8 +43,8 @@ export const useDashboardStats = (
   navigate,
   t,
 ) => {
-  const groupedStatsData = useMemo(
-    () => [
+  const groupedStatsData = useMemo(() => {
+    const groups = [
       {
         title: createSectionTitle(Wallet, t('账户数据')),
         color: 'bg-blue-50',
@@ -66,6 +67,34 @@ export const useDashboardStats = (
           },
         ],
       },
+    ];
+
+    if (upstreamAccountData) {
+      groups.push({
+        title: createSectionTitle(Wallet, t('上游账户数据')),
+        color: 'bg-sky-50',
+        items: [
+          {
+            title: t('上游余额'),
+            value: renderQuotaWithAmount(upstreamAccountData.balance_usd || 0),
+            icon: <IconMoneyExchangeStroked />,
+            avatarColor: 'light-blue',
+            trendData: [],
+            trendColor: '#0ea5e9',
+          },
+          {
+            title: t('上游历史消耗'),
+            value: renderQuotaWithAmount(upstreamAccountData.used_usd || 0),
+            icon: <IconHistogram />,
+            avatarColor: 'teal',
+            trendData: [],
+            trendColor: '#14b8a6',
+          },
+        ],
+      });
+    }
+
+    groups.push(
       {
         title: createSectionTitle(Activity, t('使用统计')),
         color: 'bg-green-50',
@@ -132,20 +161,22 @@ export const useDashboardStats = (
           },
         ],
       },
-    ],
-    [
-      userState?.user?.quota,
-      userState?.user?.used_quota,
-      userState?.user?.request_count,
-      times,
-      consumeQuota,
-      consumeTokens,
-      trendData,
-      performanceMetrics,
-      navigate,
-      t,
-    ],
-  );
+    );
+
+    return groups;
+  }, [
+    userState?.user?.quota,
+    userState?.user?.used_quota,
+    userState?.user?.request_count,
+    upstreamAccountData,
+    times,
+    consumeQuota,
+    consumeTokens,
+    trendData,
+    performanceMetrics,
+    navigate,
+    t,
+  ]);
 
   return {
     groupedStatsData,

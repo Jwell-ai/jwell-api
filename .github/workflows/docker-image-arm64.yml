@@ -1,16 +1,11 @@
 name: Publish Docker image (Multi Registries, native amd64+arm64)
 
 on:
-  push:
-    tags:
-      - '*'
-      - '!nightly*'
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Tag name to build (e.g., v0.10.8-alpha.3)'
-        required: true
-        type: string
+  workflow_run:
+    workflows:
+      - "__disabled__"
+    types:
+      - completed
 
 jobs:
   build_single_arch:

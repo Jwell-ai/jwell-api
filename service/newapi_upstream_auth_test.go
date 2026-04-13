@@ -81,7 +81,104 @@ func TestResolveNewAPIUpstreamAuthTokenIgnoresPlainKey(t *testing.T) {
 	require.Equal(t, "sk-plain", token)
 }
 
+func TestResolveNewAPIUpstreamAuthTokenUsesSeparateAuthBaseURL(t *testing.T) {
+	t.Parallel()
+
+	apiServerHit := false
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiServerHit = true
+		http.NotFound(w, r)
+	}))
+	defer apiServer.Close()
+
+	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/user/login":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"id": 42,
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/token/":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"items": []map[string]any{{"id": 7, "name": "jwell-upstream"}},
+				},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token/7/key":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"key": "sk-upstream",
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer authServer.Close()
+
+	rawKey := `{"type":"newapi_login","username":"alice","password":"secret","token_name":"jwell-upstream","auth_base_url":"` + authServer.URL + `"}`
+	token, resolved, err := ResolveNewAPIUpstreamAuthToken(context.Background(), apiServer.URL, rawKey, "")
+	require.NoError(t, err)
+	require.True(t, resolved)
+	require.Equal(t, "sk-upstream", token)
+	require.False(t, apiServerHit)
+}
+
+func TestResolveNewAPIUpstreamAuthTokenSupportsGetKeyFallback(t *testing.T) {
+	t.Parallel()
+
+	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/user/login":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"id": 42,
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/token/":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"items": []map[string]any{{"id": 12, "name": "jwell-upstream"}},
+				},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token/12/key":
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/token/12/key":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"key": "sk-get-fallback",
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer authServer.Close()
+
+	rawKey := `{"type":"newapi_login","username":"alice","password":"secret","token_name":"jwell-upstream"}`
+	token, resolved, err := ResolveNewAPIUpstreamAuthToken(context.Background(), authServer.URL, rawKey, "")
+	require.NoError(t, err)
+	require.True(t, resolved)
+	require.Equal(t, "sk-get-fallback", token)
+}
+
 func TestParseNewAPIUpstreamAuthConfigGoogleProfileUsesEnv(t *testing.T) {
+	t.Setenv("GOOGLE_API_CN_AUTH_BASE_URL", "https://google-api.cn")
 	t.Setenv("GOOGLE_API_CN_USERNAME", "alice")
 	t.Setenv("GOOGLE_API_CN_PASSWORD", "secret")
 	t.Setenv("GOOGLE_API_CN_TOKEN_NAME", "google-upstream")
@@ -92,8 +189,19 @@ func TestParseNewAPIUpstreamAuthConfigGoogleProfileUsesEnv(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "alice", cfg.Username)
 	require.Equal(t, "secret", cfg.Password)
+	require.Equal(t, "https://google-api.cn", cfg.AuthBaseURL)
 	require.Equal(t, "google-upstream", cfg.TokenName)
 	require.Equal(t, "vip", cfg.Group)
+}
+
+func TestParseNewAPIUpstreamAuthConfigGoogleProfileDefaultsAuthBaseURL(t *testing.T) {
+	t.Setenv("GOOGLE_API_CN_USERNAME", "alice")
+	t.Setenv("GOOGLE_API_CN_PASSWORD", "secret")
+
+	cfg, ok, err := ParseNewAPIUpstreamAuthConfig(`{"type":"newapi_login","profile":"google_api_cn"}`)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "https://google-api.cn", cfg.AuthBaseURL)
 }
 
 func TestParseNewAPIUpstreamAuthConfigSupportsCustomEnvNames(t *testing.T) {

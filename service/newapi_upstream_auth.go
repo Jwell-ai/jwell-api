@@ -27,6 +27,8 @@ const (
 type NewAPIUpstreamAuthConfig struct {
 	Type         string `json:"type"`
 	Profile      string `json:"profile,omitempty"`
+	AuthBaseURL  string `json:"auth_base_url,omitempty"`
+	AuthBaseEnv  string `json:"auth_base_env,omitempty"`
 	Username     string `json:"username"`
 	Password     string `json:"password"`
 	UsernameEnv  string `json:"username_env,omitempty"`
@@ -77,6 +79,8 @@ func ParseNewAPIUpstreamAuthConfig(rawKey string) (NewAPIUpstreamAuthConfig, boo
 
 func applyNewAPIUpstreamAuthEnv(cfg *NewAPIUpstreamAuthConfig) {
 	cfg.Profile = strings.TrimSpace(cfg.Profile)
+	cfg.AuthBaseURL = strings.TrimRight(strings.TrimSpace(cfg.AuthBaseURL), "/")
+	cfg.AuthBaseEnv = strings.TrimSpace(cfg.AuthBaseEnv)
 	cfg.Username = strings.TrimSpace(cfg.Username)
 	cfg.Password = strings.TrimSpace(cfg.Password)
 	cfg.UsernameEnv = strings.TrimSpace(cfg.UsernameEnv)
@@ -88,6 +92,9 @@ func applyNewAPIUpstreamAuthEnv(cfg *NewAPIUpstreamAuthConfig) {
 
 	switch strings.ToLower(strings.ReplaceAll(cfg.Profile, "-", "_")) {
 	case "google_api_cn":
+		if cfg.AuthBaseEnv == "" {
+			cfg.AuthBaseEnv = "GOOGLE_API_CN_AUTH_BASE_URL"
+		}
 		if cfg.UsernameEnv == "" {
 			cfg.UsernameEnv = "GOOGLE_API_CN_USERNAME"
 		}
@@ -102,6 +109,12 @@ func applyNewAPIUpstreamAuthEnv(cfg *NewAPIUpstreamAuthConfig) {
 		}
 	}
 
+	if cfg.AuthBaseURL == "" && cfg.AuthBaseEnv != "" {
+		cfg.AuthBaseURL = strings.TrimRight(strings.TrimSpace(common.GetEnvOrDefaultString(cfg.AuthBaseEnv, "")), "/")
+	}
+	if cfg.AuthBaseURL == "" && strings.EqualFold(strings.ReplaceAll(cfg.Profile, "-", "_"), "google_api_cn") {
+		cfg.AuthBaseURL = "https://google-api.cn"
+	}
 	if cfg.Username == "" && cfg.UsernameEnv != "" {
 		cfg.Username = strings.TrimSpace(common.GetEnvOrDefaultString(cfg.UsernameEnv, ""))
 	}
@@ -125,8 +138,12 @@ func ResolveNewAPIUpstreamAuthToken(ctx context.Context, baseURL string, rawKey 
 	if baseURL == "" {
 		return "", true, errors.New("newapi upstream auth requires channel base_url")
 	}
+	authBaseURL := cfg.AuthBaseURL
+	if authBaseURL == "" {
+		authBaseURL = baseURL
+	}
 
-	cacheKey := newAPIUpstreamAuthCacheKey(baseURL, cfg)
+	cacheKey := newAPIUpstreamAuthCacheKey(authBaseURL, cfg)
 	newAPIUpstreamTokenCacheMu.Lock()
 	if cached, exists := newAPIUpstreamTokenCache[cacheKey]; exists && time.Now().Before(cached.expiresAt) && cached.token != "" {
 		token := cached.token
@@ -135,7 +152,7 @@ func ResolveNewAPIUpstreamAuthToken(ctx context.Context, baseURL string, rawKey 
 	}
 	newAPIUpstreamTokenCacheMu.Unlock()
 
-	token, err := fetchNewAPIUpstreamToken(ctx, baseURL, cfg, proxy)
+	token, err := fetchNewAPIUpstreamToken(ctx, authBaseURL, cfg, proxy)
 	if err == nil && token != "" {
 		newAPIUpstreamTokenCacheMu.Lock()
 		newAPIUpstreamTokenCache[cacheKey] = newAPIUpstreamTokenCacheItem{
@@ -298,8 +315,16 @@ func createNewAPIUpstreamToken(ctx context.Context, client *http.Client, baseURL
 func getNewAPIUpstreamTokenKey(ctx context.Context, client *http.Client, baseURL string, userID int, tokenID int) (string, error) {
 	var result newAPIResponse[newAPITokenKeyData]
 	url := fmt.Sprintf("%s/api/token/%d/key", baseURL, tokenID)
-	if err := doNewAPIJSON(ctx, client, http.MethodPost, url, userID, nil, &result); err != nil {
-		return "", err
+	err := doNewAPIJSON(ctx, client, http.MethodPost, url, userID, nil, &result)
+	if err != nil || !result.Success {
+		postErr := err
+		if postErr == nil {
+			postErr = fmt.Errorf("newapi upstream token key fetch failed: %s", result.Message)
+		}
+		result = newAPIResponse[newAPITokenKeyData]{}
+		if getErr := doNewAPIJSON(ctx, client, http.MethodGet, url, userID, nil, &result); getErr != nil {
+			return "", fmt.Errorf("%w; GET fallback failed: %w", postErr, getErr)
+		}
 	}
 	if !result.Success {
 		return "", fmt.Errorf("newapi upstream token key fetch failed: %s", result.Message)

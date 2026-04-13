@@ -76,6 +76,7 @@ const Dashboard = () => {
   // ========== 统计数据 ==========
   const { groupedStatsData } = useDashboardStats(
     userState,
+    dashboardData.upstreamAccountData,
     dashboardData.consumeQuota,
     dashboardData.consumeTokens,
     dashboardData.times,
@@ -102,6 +103,7 @@ const Dashboard = () => {
       }
     });
     await loadUserData();
+    await dashboardData.loadUpstreamAccountData();
     await dashboardData.loadUptimeData();
   };
 
@@ -176,7 +178,7 @@ const Dashboard = () => {
 
       <StatsCards
         groupedStatsData={groupedStatsData}
-        loading={dashboardData.loading}
+        loading={dashboardData.loading || dashboardData.upstreamAccountLoading}
         getTrendSpec={getTrendSpec}
         CARD_PROPS={CARD_PROPS}
         CHART_CONFIG={CHART_CONFIG}
