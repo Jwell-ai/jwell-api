@@ -3,6 +3,8 @@ package controller
 import (
 	"testing"
 
+	"github.com/Jwell-ai/jwell-api/common"
+	"github.com/Jwell-ai/jwell-api/constant"
 	"github.com/Jwell-ai/jwell-api/dto"
 	"github.com/Jwell-ai/jwell-api/model"
 	"github.com/stretchr/testify/require"
@@ -62,6 +64,44 @@ func TestParseGoogleAPICNPricingModels(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"gpt-4o", "claude-3-5-sonnet", "gemini-2.5-pro"}, models)
+}
+
+func TestGoogleAPICNModelEndpointTypes(t *testing.T) {
+	require.Equal(t,
+		[]constant.EndpointType{constant.EndpointTypeGemini, constant.EndpointTypeOpenAI},
+		googleAPICNModelEndpointTypes("gemini-2.5-flash-thinking"),
+	)
+	require.Equal(t,
+		[]constant.EndpointType{constant.EndpointTypeAnthropic, constant.EndpointTypeOpenAI},
+		googleAPICNModelEndpointTypes("claude-opus-4-1-20250805"),
+	)
+	require.Equal(t,
+		[]constant.EndpointType{constant.EndpointTypeImageGeneration},
+		googleAPICNModelEndpointTypes("nano-banana-pro-preview"),
+	)
+	require.Equal(t,
+		[]constant.EndpointType{constant.EndpointTypeEmbeddings},
+		googleAPICNModelEndpointTypes("gemini-embedding-001"),
+	)
+	require.Equal(t,
+		[]constant.EndpointType{constant.EndpointTypeOpenAIResponse},
+		googleAPICNModelEndpointTypes("gpt-5-codex"),
+	)
+}
+
+func TestGoogleAPICNModelEndpointsUsesDefaultPaths(t *testing.T) {
+	endpointsJSON, err := googleAPICNModelEndpoints("gemini-2.5-flash")
+	require.NoError(t, err)
+
+	var endpoints map[string]common.EndpointInfo
+	require.NoError(t, common.UnmarshalJsonStr(endpointsJSON, &endpoints))
+	require.Equal(t, "/v1beta/models/{model}:generateContent", endpoints[string(constant.EndpointTypeGemini)].Path)
+	require.Equal(t, "/v1/chat/completions", endpoints[string(constant.EndpointTypeOpenAI)].Path)
+
+	endpointsJSON, err = googleAPICNModelEndpoints("sora-2")
+	require.NoError(t, err)
+	require.NoError(t, common.UnmarshalJsonStr(endpointsJSON, &endpoints))
+	require.Equal(t, "/v1/videos", endpoints[string(constant.EndpointTypeOpenAIVideo)].Path)
 }
 
 func TestSubtractModelNames(t *testing.T) {

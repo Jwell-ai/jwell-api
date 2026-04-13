@@ -202,6 +202,7 @@ func createGoogleAPICNChannel(ctx context.Context, cfg googleAPICNBootstrapConfi
 		return err
 	}
 	refreshChannelRuntimeCache()
+	model.RefreshPricing()
 	common.SysLog(fmt.Sprintf("google-api.cn channel bootstrapped: channel_id=%d models=%d", channel.Id, len(models)))
 	return nil
 }
@@ -282,6 +283,7 @@ func syncGoogleAPICNChannel(ctx context.Context, channel *model.Channel, cfg goo
 		if err := channel.UpdateAbilities(nil); err != nil {
 			return err
 		}
+		model.RefreshPricing()
 	}
 	refreshChannelRuntimeCache()
 	common.SysLog(fmt.Sprintf("google-api.cn channel synced: channel_id=%d fetched_models=%d models_changed=%t", channel.Id, len(models), modelsChanged))
@@ -334,23 +336,53 @@ func ensureGoogleAPICNModelMetas(models []string) error {
 		return nil
 	}
 
-	var existing []string
-	if err := model.DB.Model(&model.Model{}).Where("model_name IN ?", names).Pluck("model_name", &existing).Error; err != nil {
+	var existing []model.Model
+	if err := model.DB.
+		Select("id", "model_name", "endpoints", "vendor_id", "sync_official").
+		Where("model_name IN ?", names).
+		Find(&existing).Error; err != nil {
 		return err
 	}
-	existingSet := make(map[string]struct{}, len(existing))
-	for _, name := range existing {
-		existingSet[name] = struct{}{}
+	existingByName := make(map[string]model.Model, len(existing))
+	for _, item := range existing {
+		existingByName[item.ModelName] = item
 	}
 
 	now := common.GetTimestamp()
 	created := 0
+	updated := 0
+	vendorIDs := make(map[string]int)
 	for _, name := range names {
-		if _, ok := existingSet[name]; ok {
+		endpoints, err := googleAPICNModelEndpoints(name)
+		if err != nil {
+			return err
+		}
+		vendorID, err := googleAPICNModelVendorID(name, vendorIDs)
+		if err != nil {
+			return err
+		}
+		if existingModel, ok := existingByName[name]; ok {
+			updates := map[string]interface{}{}
+			if strings.TrimSpace(existingModel.Endpoints) == "" && endpoints != "" {
+				updates["endpoints"] = endpoints
+			}
+			if existingModel.VendorID == 0 && vendorID > 0 {
+				updates["vendor_id"] = vendorID
+			}
+			if len(updates) == 0 {
+				continue
+			}
+			updates["updated_time"] = now
+			if err := model.DB.Model(&model.Model{}).Where("id = ?", existingModel.Id).Updates(updates).Error; err != nil {
+				return err
+			}
+			updated++
 			continue
 		}
 		modelMeta := &model.Model{
 			ModelName:    name,
+			VendorID:     vendorID,
+			Endpoints:    endpoints,
 			Status:       1,
 			SyncOfficial: 0,
 			NameRule:     model.NameRuleExact,
@@ -362,10 +394,148 @@ func ensureGoogleAPICNModelMetas(models []string) error {
 		}
 		created++
 	}
-	if created > 0 {
-		common.SysLog(fmt.Sprintf("google-api.cn model metadata synced: created=%d", created))
+	if created > 0 || updated > 0 {
+		model.RefreshPricing()
+		common.SysLog(fmt.Sprintf("google-api.cn model metadata synced: created=%d updated=%d", created, updated))
 	}
 	return nil
+}
+
+func googleAPICNModelEndpoints(modelName string) (string, error) {
+	endpointTypes := googleAPICNModelEndpointTypes(modelName)
+	if len(endpointTypes) == 0 {
+		return "", nil
+	}
+	endpoints := make(map[constant.EndpointType]common.EndpointInfo, len(endpointTypes))
+	for _, endpointType := range endpointTypes {
+		info, ok := common.GetDefaultEndpointInfo(endpointType)
+		if !ok {
+			continue
+		}
+		endpoints[endpointType] = info
+	}
+	if len(endpoints) == 0 {
+		return "", nil
+	}
+	data, err := common.Marshal(endpoints)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func googleAPICNModelEndpointTypes(modelName string) []constant.EndpointType {
+	name := strings.ToLower(strings.TrimSpace(modelName))
+	switch {
+	case name == "":
+		return nil
+	case strings.Contains(name, "rerank"):
+		return []constant.EndpointType{constant.EndpointTypeJinaRerank}
+	case strings.Contains(name, "embedding") ||
+		strings.Contains(name, "embed") ||
+		strings.HasPrefix(name, "m3e") ||
+		strings.Contains(name, "bge-"):
+		return []constant.EndpointType{constant.EndpointTypeEmbeddings}
+	case strings.Contains(name, "sora") ||
+		strings.Contains(name, "veo-") ||
+		strings.Contains(name, "video") ||
+		strings.Contains(name, "seedance"):
+		return []constant.EndpointType{constant.EndpointTypeOpenAIVideo}
+	case common.IsImageGenerationModel(name) ||
+		strings.Contains(name, "image") ||
+		strings.Contains(name, "imagen") ||
+		strings.Contains(name, "nano-banana") ||
+		strings.Contains(name, "seedream") ||
+		strings.Contains(name, "jimeng"):
+		return []constant.EndpointType{constant.EndpointTypeImageGeneration}
+	case strings.Contains(name, "claude"):
+		return []constant.EndpointType{constant.EndpointTypeAnthropic, constant.EndpointTypeOpenAI}
+	case strings.Contains(name, "gemini") || strings.Contains(name, "gemma"):
+		return []constant.EndpointType{constant.EndpointTypeGemini, constant.EndpointTypeOpenAI}
+	case strings.Contains(name, "codex") || common.IsOpenAIResponseOnlyModel(name):
+		return []constant.EndpointType{constant.EndpointTypeOpenAIResponse}
+	default:
+		return []constant.EndpointType{constant.EndpointTypeOpenAI}
+	}
+}
+
+func googleAPICNModelVendorID(modelName string, cache map[string]int) (int, error) {
+	vendorName, icon := googleAPICNModelVendor(modelName)
+	if vendorName == "" {
+		return 0, nil
+	}
+	if id, ok := cache[vendorName]; ok {
+		return id, nil
+	}
+	var vendor model.Vendor
+	err := model.DB.Where("name = ?", vendorName).First(&vendor).Error
+	if err == nil {
+		cache[vendorName] = vendor.Id
+		return vendor.Id, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return 0, err
+	}
+	vendor = model.Vendor{
+		Name:   vendorName,
+		Icon:   icon,
+		Status: 1,
+	}
+	if err := vendor.Insert(); err != nil {
+		return 0, err
+	}
+	cache[vendorName] = vendor.Id
+	return vendor.Id, nil
+}
+
+func googleAPICNModelVendor(modelName string) (string, string) {
+	name := strings.ToLower(strings.TrimSpace(modelName))
+	switch {
+	case name == "":
+		return "", ""
+	case strings.Contains(name, "claude"):
+		return "Anthropic", "Claude.Color"
+	case strings.Contains(name, "gemini") ||
+		strings.Contains(name, "gemma") ||
+		strings.Contains(name, "imagen") ||
+		strings.Contains(name, "veo-") ||
+		strings.Contains(name, "nano-banana"):
+		return "Google", "Gemini.Color"
+	case strings.Contains(name, "gpt") ||
+		strings.Contains(name, "chatgpt") ||
+		strings.HasPrefix(name, "o1") ||
+		strings.HasPrefix(name, "o3") ||
+		strings.HasPrefix(name, "o4") ||
+		strings.Contains(name, "dall-e") ||
+		strings.Contains(name, "whisper") ||
+		strings.Contains(name, "tts") ||
+		strings.Contains(name, "sora"):
+		return "OpenAI", "OpenAI"
+	case strings.Contains(name, "deepseek"):
+		return "DeepSeek", "DeepSeek"
+	case strings.Contains(name, "qwen") || strings.Contains(name, "qwq"):
+		return "阿里巴巴", "Qwen.Color"
+	case strings.Contains(name, "moonshot") || strings.Contains(name, "kimi"):
+		return "Moonshot", "Moonshot"
+	case strings.Contains(name, "glm") || strings.Contains(name, "chatglm"):
+		return "智谱", "Zhipu.Color"
+	case strings.Contains(name, "ernie") || strings.Contains(name, "bge-"):
+		return "百度", "Wenxin.Color"
+	case strings.Contains(name, "hunyuan"):
+		return "腾讯", "Hunyuan.Color"
+	case strings.Contains(name, "command"):
+		return "Cohere", "Cohere.Color"
+	case strings.Contains(name, "grok"):
+		return "xAI", "XAI"
+	case strings.Contains(name, "jina"):
+		return "Jina", "Jina"
+	case strings.Contains(name, "mistral") || strings.Contains(name, "mixtral"):
+		return "Mistral", "Mistral.Color"
+	case strings.Contains(name, "doubao") || strings.Contains(name, "seedream") || strings.Contains(name, "seedance"):
+		return "字节跳动", "Doubao.Color"
+	default:
+		return "", ""
+	}
 }
 
 func googleAPICNConfigMatchesChannel(channel *model.Channel, cfg googleAPICNBootstrapConfig) bool {
