@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -300,6 +301,14 @@ func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 		return nil, fmt.Errorf("获取渠道密钥失败: %w", apiErr)
 	}
 	key = strings.TrimSpace(key)
+	authCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if resolvedKey, resolved, err := service.ResolveNewAPIUpstreamAuthToken(authCtx, baseURL, key, channel.GetSetting().Proxy); resolved {
+		if err != nil {
+			return nil, err
+		}
+		key = resolvedKey
+	}
 
 	headers, err := buildFetchModelsHeaders(channel, key)
 	if err != nil {

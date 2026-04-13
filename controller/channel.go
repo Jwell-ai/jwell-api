@@ -191,10 +191,16 @@ func buildFetchModelsHeaders(channel *model.Channel, key string) (http.Header, e
 		if !ok {
 			return nil, fmt.Errorf("invalid header override for key %s", k)
 		}
-		if strings.Contains(str, "{api_key}") {
-			str = strings.ReplaceAll(str, "{api_key}", key)
+		if relaychannel.IsClientHeaderPlaceholder(str) {
+			continue
 		}
-		headers.Set(k, str)
+		value, include, err := relaychannel.ApplyHeaderOverridePlaceholders(str, nil, key)
+		if err != nil {
+			return nil, err
+		}
+		if include {
+			headers.Set(k, value)
+		}
 	}
 
 	return headers, nil
@@ -972,9 +978,10 @@ func UpdateChannel(c *gin.Context) {
 
 func FetchModels(c *gin.Context) {
 	var req struct {
-		BaseURL string `json:"base_url"`
-		Type    int    `json:"type"`
-		Key     string `json:"key"`
+		BaseURL        string `json:"base_url"`
+		Type           int    `json:"type"`
+		Key            string `json:"key"`
+		HeaderOverride string `json:"header_override"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -993,6 +1000,16 @@ func FetchModels(c *gin.Context) {
 	// remove line breaks and extra spaces.
 	key := strings.TrimSpace(req.Key)
 	key = strings.Split(key, "\n")[0]
+	if resolvedKey, resolved, err := service.ResolveNewAPIUpstreamAuthToken(c.Request.Context(), baseURL, key, ""); resolved {
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+		key = resolvedKey
+	}
 
 	if req.Type == constant.ChannelTypeOllama {
 		models, err := ollama.FetchOllamaModels(baseURL, key)
@@ -1045,7 +1062,21 @@ func FetchModels(c *gin.Context) {
 		return
 	}
 
-	request.Header.Set("Authorization", "Bearer "+key)
+	headerOverride := strings.TrimSpace(req.HeaderOverride)
+	channel := &model.Channel{Type: req.Type}
+	if headerOverride != "" {
+		channel.HeaderOverride = common.GetPointer(headerOverride)
+	}
+
+	headers, err := buildFetchModelsHeaders(channel, key)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+	request.Header = headers
 
 	response, err := client.Do(request)
 	if err != nil {

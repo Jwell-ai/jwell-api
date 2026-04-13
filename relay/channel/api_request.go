@@ -2,6 +2,7 @@ package channel
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -115,6 +116,10 @@ func isHeaderPassthroughRuleKey(key string) bool {
 	return strings.HasPrefix(lower, headerPassthroughRegexPrefix) || strings.HasPrefix(lower, headerPassthroughRegexPrefixV2)
 }
 
+func IsClientHeaderPlaceholder(template string) bool {
+	return strings.HasPrefix(strings.TrimSpace(template), clientHeaderPlaceholderPrefix)
+}
+
 func shouldSkipPassthroughHeader(name string) bool {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -154,15 +159,26 @@ func applyHeaderOverridePlaceholders(template string, c *gin.Context, apiKey str
 	if strings.Contains(template, "{api_key}") {
 		template = strings.ReplaceAll(template, "{api_key}", apiKey)
 	}
+	if strings.Contains(template, "{api_key_base64}") || strings.Contains(template, "{api_key_basic}") {
+		encodedAPIKey := base64.StdEncoding.EncodeToString([]byte(apiKey))
+		template = strings.ReplaceAll(template, "{api_key_base64}", encodedAPIKey)
+		template = strings.ReplaceAll(template, "{api_key_basic}", "Basic "+encodedAPIKey)
+	}
 	if strings.TrimSpace(template) == "" {
 		return "", false, nil
 	}
 	return template, true, nil
 }
 
+func ApplyHeaderOverridePlaceholders(template string, c *gin.Context, apiKey string) (string, bool, error) {
+	return applyHeaderOverridePlaceholders(template, c, apiKey)
+}
+
 // processHeaderOverride applies channel header overrides, with placeholder substitution.
 // Supported placeholders:
 //   - {api_key}: resolved to the channel API key
+//   - {api_key_base64}: resolved to the base64-encoded channel API key
+//   - {api_key_basic}: resolved to "Basic " + base64({api_key})
 //   - {client_header:<name>}: resolved to the incoming request header value
 //
 // Header passthrough rules (keys only; values are ignored):

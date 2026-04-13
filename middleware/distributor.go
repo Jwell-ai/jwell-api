@@ -371,6 +371,12 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	if newAPIError != nil {
 		return newAPIError
 	}
+	if resolvedKey, resolved, err := service.ResolveNewAPIUpstreamAuthToken(c.Request.Context(), channel.GetBaseURL(), key, channel.GetSetting().Proxy); resolved {
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+		}
+		key = resolvedKey
+	}
 	if channel.ChannelInfo.IsMultiKey {
 		common.SetContextKey(c, constant.ContextKeyChannelIsMultiKey, true)
 		common.SetContextKey(c, constant.ContextKeyChannelMultiKeyIndex, index)

@@ -1058,6 +1058,7 @@ const EditChannelModal = (props) => {
               base_url: inputs['base_url'],
               type: inputs['type'],
               key: inputs['key'],
+              header_override: inputs['header_override'],
             },
             { skipErrorHandler: true },
           );
@@ -2388,6 +2389,12 @@ const EditChannelModal = (props) => {
                           <div className='text-xs text-tertiary ml-2'>
                             <div>
                               {t('渠道密钥')}: {'{api_key}'}
+                            </div>
+                            <div>
+                              {t('渠道密钥 Base64')}: {'{api_key_base64}'}
+                            </div>
+                            <div>
+                              {t('Basic 鉴权')}: {'{api_key_basic}'}
                             </div>
                           </div>
                         </div>

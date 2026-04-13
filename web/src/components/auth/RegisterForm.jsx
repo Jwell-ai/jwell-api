@@ -129,16 +129,20 @@ const RegisterForm = () => {
       return {};
     }
   }, [statusState?.status]);
+  const registerEnabled = status.register_enabled !== false;
+  const passwordRegisterEnabled = status.password_register_enabled !== false;
+  const hasPasswordRegister = registerEnabled && passwordRegisterEnabled;
   const hasCustomOAuthProviders =
     (status.custom_oauth_providers || []).length > 0;
   const hasOAuthRegisterOptions = Boolean(
-    status.github_oauth ||
+    registerEnabled &&
+    (status.github_oauth ||
       status.discord_oauth ||
       status.oidc_enabled ||
       status.wechat_login ||
       status.linuxdo_oauth ||
       status.telegram_oauth ||
-      hasCustomOAuthProviders,
+      hasCustomOAuthProviders),
   );
 
   const [showEmailVerification, setShowEmailVerification] = useState(false);
@@ -216,6 +220,14 @@ const RegisterForm = () => {
   }
 
   async function handleSubmit(e) {
+    if (!registerEnabled) {
+      showInfo(t('管理员关闭了新用户注册'));
+      return;
+    }
+    if (!passwordRegisterEnabled) {
+      showInfo(t('管理员关闭了密码注册'));
+      return;
+    }
     if (password.length < 8) {
       showInfo('密码长度不得小于 8 位！');
       return;
@@ -520,20 +532,24 @@ const RegisterForm = () => {
                   </div>
                 )}
 
-                <Divider margin='12px' align='center'>
-                  {t('或')}
-                </Divider>
+                {hasPasswordRegister && (
+                  <>
+                    <Divider margin='12px' align='center'>
+                      {t('或')}
+                    </Divider>
 
-                <Button
-                  theme='solid'
-                  type='primary'
-                  className='w-full h-12 flex items-center justify-center bg-black text-white !rounded-full hover:bg-gray-800 transition-colors'
-                  icon={<IconMail size='large' />}
-                  onClick={handleEmailRegisterClick}
-                  loading={emailRegisterLoading}
-                >
-                  <span className='ml-3'>{t('使用 用户名 注册')}</span>
-                </Button>
+                    <Button
+                      theme='solid'
+                      type='primary'
+                      className='w-full h-12 flex items-center justify-center bg-black text-white !rounded-full hover:bg-gray-800 transition-colors'
+                      icon={<IconMail size='large' />}
+                      onClick={handleEmailRegisterClick}
+                      loading={emailRegisterLoading}
+                    >
+                      <span className='ml-3'>{t('使用 用户名 注册')}</span>
+                    </Button>
+                  </>
+                )}
               </div>
 
               <div className='mt-6 text-center text-sm'>
@@ -730,6 +746,42 @@ const RegisterForm = () => {
     );
   };
 
+  const renderRegisterUnavailable = () => {
+    const message = registerEnabled
+      ? t('管理员未开启可用注册方式')
+      : t('管理员关闭了新用户注册');
+    return (
+      <div className='flex flex-col items-center'>
+        <div className='w-full max-w-md'>
+          <div className='flex items-center justify-center mb-6 gap-2'>
+            <img src={logo} alt='Logo' className='h-10 rounded-full' />
+            <Title heading={3} className='!text-gray-800'>
+              {systemName}
+            </Title>
+          </div>
+
+          <Card className='border-0 !rounded-2xl overflow-hidden'>
+            <div className='px-6 py-10 text-center'>
+              <Title heading={4} className='text-gray-800 dark:text-gray-200'>
+                {message}
+              </Title>
+              <div className='mt-6 text-sm'>
+                <Text>
+                  <Link
+                    to='/login'
+                    className='text-blue-600 hover:text-blue-800 font-medium'
+                  >
+                    {t('返回登录')}
+                  </Link>
+                </Text>
+              </div>
+            </div>
+          </Card>
+        </div>
+      </div>
+    );
+  };
+
   const renderWeChatLoginModal = () => {
     return (
       <Modal
@@ -781,22 +833,25 @@ const RegisterForm = () => {
         style={{ top: '50%', left: '-120px' }}
       />
       <div className='w-full max-w-sm mt-[60px]'>
-        {showEmailRegister ||
-        !hasOAuthRegisterOptions
-          ? renderEmailRegisterForm()
-          : renderOAuthOptions()}
+        {!registerEnabled || (!hasPasswordRegister && !hasOAuthRegisterOptions)
+          ? renderRegisterUnavailable()
+          : showEmailRegister || !hasOAuthRegisterOptions
+            ? renderEmailRegisterForm()
+            : renderOAuthOptions()}
         {renderWeChatLoginModal()}
 
-        {turnstileEnabled && (
-          <div className='flex justify-center mt-6'>
-            <Turnstile
-              sitekey={turnstileSiteKey}
-              onVerify={(token) => {
-                setTurnstileToken(token);
-              }}
-            />
-          </div>
-        )}
+        {turnstileEnabled &&
+          registerEnabled &&
+          (hasPasswordRegister || hasOAuthRegisterOptions) && (
+            <div className='flex justify-center mt-6'>
+              <Turnstile
+                sitekey={turnstileSiteKey}
+                onVerify={(token) => {
+                  setTurnstileToken(token);
+                }}
+              />
+            </div>
+          )}
       </div>
     </div>
   );

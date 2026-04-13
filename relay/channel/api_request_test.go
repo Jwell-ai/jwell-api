@@ -80,6 +80,31 @@ func TestProcessHeaderOverride_NonTestKeepsClientHeaderPlaceholder(t *testing.T)
 	require.Equal(t, "trace-123", headers["x-upstream-trace"])
 }
 
+func TestProcessHeaderOverride_ApiKeyEncodingPlaceholders(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+	info := &relaycommon.RelayInfo{
+		IsChannelTest: false,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ApiKey: "user:pass",
+			HeadersOverride: map[string]any{
+				"Authorization": "Basic {api_key_base64}",
+				"X-Basic":       "{api_key_basic}",
+			},
+		},
+	}
+
+	headers, err := processHeaderOverride(info, ctx)
+	require.NoError(t, err)
+	require.Equal(t, "Basic dXNlcjpwYXNz", headers["authorization"])
+	require.Equal(t, "Basic dXNlcjpwYXNz", headers["x-basic"])
+}
+
 func TestProcessHeaderOverride_RuntimeOverrideIsFinalHeaderMap(t *testing.T) {
 	t.Parallel()
 

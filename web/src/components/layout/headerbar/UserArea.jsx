@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useRef } from 'react';
+import React, { useContext, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { Avatar, Button, Dropdown, Typography } from '@douyinfe/semi-ui';
 import { ChevronDown } from 'lucide-react';
@@ -29,6 +29,7 @@ import {
 } from '@douyinfe/semi-icons';
 import { stringToColor } from '../../../helpers';
 import SkeletonWrapper from '../components/SkeletonWrapper';
+import { StatusContext } from '../../../context/Status';
 
 const UserArea = ({
   userState,
@@ -40,6 +41,18 @@ const UserArea = ({
   t,
 }) => {
   const dropdownRef = useRef(null);
+  const [statusState] = useContext(StatusContext);
+  const status = useMemo(() => {
+    if (statusState?.status) return statusState.status;
+    const savedStatus = localStorage.getItem('status');
+    if (!savedStatus) return {};
+    try {
+      return JSON.parse(savedStatus) || {};
+    } catch (err) {
+      return {};
+    }
+  }, [statusState?.status]);
+
   if (isLoading) {
     return (
       <SkeletonWrapper
@@ -142,7 +155,8 @@ const UserArea = ({
       </div>
     );
   } else {
-    const showRegisterButton = !isSelfUseMode;
+    const showRegisterButton =
+      !isSelfUseMode && status.register_enabled !== false;
 
     const commonSizingAndLayoutClass =
       'flex items-center justify-center !py-[10px] !px-1.5';
