@@ -385,6 +385,9 @@ func checkAndPersistChannelUpstreamModelUpdates(
 			if err = ensureGoogleAPICNModelRatiosForChannel(channel, pendingAddModels); err != nil {
 				return false, 0, err
 			}
+			if err = ensureGoogleAPICNModelMetas(pendingAddModels); err != nil {
+				return false, 0, err
+			}
 			channel.Models = strings.Join(mergedModels, ",")
 			autoAdded = len(mergedModels) - len(originModels)
 			modelsChanged = true
@@ -803,6 +806,9 @@ func applyChannelUpstreamModelUpdates(
 	modelsChanged = !slices.Equal(originModels, nextModels)
 	if modelsChanged {
 		if err = ensureGoogleAPICNModelRatiosForChannel(channel, addModels); err != nil {
+			return nil, nil, nil, nil, false, err
+		}
+		if err = ensureGoogleAPICNModelMetas(addModels); err != nil {
 			return nil, nil, nil, nil, false, err
 		}
 		channel.Models = strings.Join(nextModels, ",")

@@ -56,6 +56,32 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 	return normalized
 }
 
+func refreshChannelTestUpstreamAuthToken(c *gin.Context, channel *model.Channel, info *relaycommon.RelayInfo) bool {
+	if channel == nil || info == nil {
+		return false
+	}
+	key, _, newAPIError := channel.GetNextEnabledKey()
+	if newAPIError != nil {
+		common.SysLog(fmt.Sprintf("channel test upstream auth refresh skipped: channel_id=%d err=%v", channel.Id, newAPIError))
+		return false
+	}
+	if !service.InvalidateNewAPIUpstreamAuthToken(channel.GetBaseURL(), key) {
+		return false
+	}
+	resolvedKey, resolved, err := service.ResolveNewAPIUpstreamAuthToken(c.Request.Context(), channel.GetBaseURL(), key, channel.GetSetting().Proxy)
+	if !resolved {
+		return false
+	}
+	if err != nil {
+		common.SysError(fmt.Sprintf("channel test upstream auth refresh failed: channel_id=%d err=%v", channel.Id, err))
+		return false
+	}
+	common.SetContextKey(c, constant.ContextKeyChannelKey, resolvedKey)
+	info.ApiKey = resolvedKey
+	common.SysLog(fmt.Sprintf("channel test refreshed upstream auth token after 401: channel_id=%d name=%s", channel.Id, channel.Name))
+	return true
+}
+
 func testChannel(channel *model.Channel, testModel string, endpointType string, isStream bool) testResult {
 	tik := time.Now()
 	var unsupportedTestChannelTypes = []int{
@@ -415,6 +441,22 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 	var httpResp *http.Response
 	if resp != nil {
 		httpResp = resp.(*http.Response)
+		if httpResp.StatusCode == http.StatusUnauthorized && refreshChannelTestUpstreamAuthToken(c, channel, info) {
+			service.CloseResponseBodyGracefully(httpResp)
+			requestBody = bytes.NewBuffer(jsonData)
+			c.Request.Body = io.NopCloser(bytes.NewBuffer(jsonData))
+			resp, err = adaptor.DoRequest(c, info, requestBody)
+			if err != nil {
+				return testResult{
+					context:     c,
+					localErr:    err,
+					newAPIError: types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError),
+				}
+			}
+			if resp != nil {
+				httpResp = resp.(*http.Response)
+			}
+		}
 		if httpResp.StatusCode != http.StatusOK {
 			err := service.RelayErrorHandler(c.Request.Context(), httpResp, true)
 			common.SysError(fmt.Sprintf(

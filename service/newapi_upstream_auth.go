@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -167,6 +168,29 @@ func ResolveNewAPIUpstreamAuthToken(ctx context.Context, baseURL string, rawKey 
 	return token, true, nil
 }
 
+func InvalidateNewAPIUpstreamAuthToken(baseURL string, rawKey string) bool {
+	cfg, ok, err := ParseNewAPIUpstreamAuthConfig(rawKey)
+	if err != nil || !ok {
+		return false
+	}
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	authBaseURL := cfg.AuthBaseURL
+	if authBaseURL == "" {
+		authBaseURL = baseURL
+	}
+	if authBaseURL == "" {
+		return false
+	}
+	cacheKey := newAPIUpstreamAuthCacheKey(authBaseURL, cfg)
+	newAPIUpstreamTokenCacheMu.Lock()
+	defer newAPIUpstreamTokenCacheMu.Unlock()
+	if _, exists := newAPIUpstreamTokenCache[cacheKey]; !exists {
+		return false
+	}
+	delete(newAPIUpstreamTokenCache, cacheKey)
+	return true
+}
+
 func newAPIUpstreamAuthCacheKey(baseURL string, cfg NewAPIUpstreamAuthConfig) string {
 	passwordHash := sha256.Sum256([]byte(cfg.Password))
 	return strings.Join([]string{
@@ -200,6 +224,13 @@ type newAPITokenPage struct {
 
 type newAPITokenKeyData struct {
 	Key string `json:"key"`
+}
+
+type newAPITokenKeyResponse struct {
+	Success bool            `json:"success"`
+	Message string          `json:"message"`
+	Key     string          `json:"key,omitempty"`
+	Data    json.RawMessage `json:"data"`
 }
 
 type NewAPIUpstreamAccount struct {
@@ -362,7 +393,7 @@ func createNewAPIUpstreamToken(ctx context.Context, client *http.Client, baseURL
 }
 
 func getNewAPIUpstreamTokenKey(ctx context.Context, client *http.Client, baseURL string, userID int, tokenID int) (string, error) {
-	var result newAPIResponse[newAPITokenKeyData]
+	var result newAPITokenKeyResponse
 	url := fmt.Sprintf("%s/api/token/%d/key", baseURL, tokenID)
 	err := doNewAPIJSON(ctx, client, http.MethodPost, url, userID, nil, &result)
 	if err != nil || !result.Success {
@@ -370,7 +401,7 @@ func getNewAPIUpstreamTokenKey(ctx context.Context, client *http.Client, baseURL
 		if postErr == nil {
 			postErr = fmt.Errorf("newapi upstream token key fetch failed: %s", result.Message)
 		}
-		result = newAPIResponse[newAPITokenKeyData]{}
+		result = newAPITokenKeyResponse{}
 		if getErr := doNewAPIJSON(ctx, client, http.MethodGet, url, userID, nil, &result); getErr != nil {
 			return "", fmt.Errorf("%w; GET fallback failed: %w", postErr, getErr)
 		}
@@ -378,11 +409,31 @@ func getNewAPIUpstreamTokenKey(ctx context.Context, client *http.Client, baseURL
 	if !result.Success {
 		return "", fmt.Errorf("newapi upstream token key fetch failed: %s", result.Message)
 	}
-	key := strings.TrimSpace(result.Data.Key)
+	key := parseNewAPIUpstreamTokenKey(result)
 	if key == "" {
 		return "", errors.New("newapi upstream token key is empty")
 	}
 	return key, nil
+}
+
+func parseNewAPIUpstreamTokenKey(result newAPITokenKeyResponse) string {
+	if key := strings.TrimSpace(result.Key); key != "" {
+		return key
+	}
+	if len(result.Data) == 0 {
+		return ""
+	}
+	var keyData newAPITokenKeyData
+	if err := common.Unmarshal(result.Data, &keyData); err == nil {
+		if key := strings.TrimSpace(keyData.Key); key != "" {
+			return key
+		}
+	}
+	var rawKey string
+	if err := common.Unmarshal(result.Data, &rawKey); err == nil {
+		return strings.TrimSpace(rawKey)
+	}
+	return ""
 }
 
 func doNewAPIJSON(ctx context.Context, client *http.Client, method string, url string, userID int, payload []byte, out any) error {

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -175,6 +176,103 @@ func TestResolveNewAPIUpstreamAuthTokenSupportsGetKeyFallback(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, resolved)
 	require.Equal(t, "sk-get-fallback", token)
+}
+
+func TestResolveNewAPIUpstreamAuthTokenSupportsStringKeyData(t *testing.T) {
+	t.Parallel()
+
+	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/user/login":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"id": 42,
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/token/":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"items": []map[string]any{{"id": 12, "name": "jwell-upstream"}},
+				},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token/12/key":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data":    "sk-string-data",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer authServer.Close()
+
+	rawKey := `{"type":"newapi_login","username":"alice","password":"secret","token_name":"jwell-upstream"}`
+	token, resolved, err := ResolveNewAPIUpstreamAuthToken(context.Background(), authServer.URL, rawKey, "")
+	require.NoError(t, err)
+	require.True(t, resolved)
+	require.Equal(t, "sk-string-data", token)
+}
+
+func TestInvalidateNewAPIUpstreamAuthToken(t *testing.T) {
+	t.Parallel()
+
+	keyFetchCount := 0
+	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/user/login":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"id": 42,
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/token/":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"items": []map[string]any{{"id": 7, "name": "jwell-upstream"}},
+				},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token/7/key":
+			keyFetchCount++
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"key": fmt.Sprintf("sk-%d", keyFetchCount),
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer authServer.Close()
+
+	rawKey := `{"type":"newapi_login","username":"alice","password":"secret","token_name":"jwell-upstream"}`
+	token, resolved, err := ResolveNewAPIUpstreamAuthToken(context.Background(), authServer.URL, rawKey, "")
+	require.NoError(t, err)
+	require.True(t, resolved)
+	require.Equal(t, "sk-1", token)
+
+	token, resolved, err = ResolveNewAPIUpstreamAuthToken(context.Background(), authServer.URL, rawKey, "")
+	require.NoError(t, err)
+	require.True(t, resolved)
+	require.Equal(t, "sk-1", token)
+	require.True(t, InvalidateNewAPIUpstreamAuthToken(authServer.URL, rawKey))
+
+	token, resolved, err = ResolveNewAPIUpstreamAuthToken(context.Background(), authServer.URL, rawKey, "")
+	require.NoError(t, err)
+	require.True(t, resolved)
+	require.Equal(t, "sk-2", token)
 }
 
 func TestParseNewAPIUpstreamAuthConfigGoogleProfileUsesEnv(t *testing.T) {

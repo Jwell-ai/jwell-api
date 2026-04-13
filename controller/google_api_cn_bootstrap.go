@@ -194,6 +194,9 @@ func createGoogleAPICNChannel(ctx context.Context, cfg googleAPICNBootstrapConfi
 	if err := ensureGoogleAPICNModelRatios(models, cfg); err != nil {
 		return err
 	}
+	if err := ensureGoogleAPICNModelMetas(models); err != nil {
+		return err
+	}
 
 	if err := channel.Insert(); err != nil {
 		return err
@@ -246,6 +249,9 @@ func syncGoogleAPICNChannel(ctx context.Context, channel *model.Channel, cfg goo
 	modelsChanged := strings.Join(normalizeModelNames(channel.GetModels()), ",") != strings.Join(mergedModels, ",")
 	channel.Models = strings.Join(mergedModels, ",")
 	if err := ensureGoogleAPICNModelRatios(models, cfg); err != nil {
+		return err
+	}
+	if err := ensureGoogleAPICNModelMetas(models); err != nil {
 		return err
 	}
 	tagChanged := originTag != channel.GetTag()
@@ -320,6 +326,46 @@ func ensureGoogleAPICNModelRatiosForChannel(channel *model.Channel, models []str
 		return nil
 	}
 	return ensureGoogleAPICNModelRatios(models, cfg)
+}
+
+func ensureGoogleAPICNModelMetas(models []string) error {
+	names := normalizeModelNames(models)
+	if len(names) == 0 {
+		return nil
+	}
+
+	var existing []string
+	if err := model.DB.Model(&model.Model{}).Where("model_name IN ?", names).Pluck("model_name", &existing).Error; err != nil {
+		return err
+	}
+	existingSet := make(map[string]struct{}, len(existing))
+	for _, name := range existing {
+		existingSet[name] = struct{}{}
+	}
+
+	now := common.GetTimestamp()
+	created := 0
+	for _, name := range names {
+		if _, ok := existingSet[name]; ok {
+			continue
+		}
+		modelMeta := &model.Model{
+			ModelName:    name,
+			Status:       1,
+			SyncOfficial: 0,
+			NameRule:     model.NameRuleExact,
+			CreatedTime:  now,
+			UpdatedTime:  now,
+		}
+		if err := modelMeta.Insert(); err != nil {
+			return err
+		}
+		created++
+	}
+	if created > 0 {
+		common.SysLog(fmt.Sprintf("google-api.cn model metadata synced: created=%d", created))
+	}
+	return nil
 }
 
 func googleAPICNConfigMatchesChannel(channel *model.Channel, cfg googleAPICNBootstrapConfig) bool {
