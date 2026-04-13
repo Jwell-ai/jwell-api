@@ -96,6 +96,11 @@ const STATUS_CODE_MAPPING_EXAMPLE = {
   400: '500',
 };
 
+const UPSTREAM_GROUP_MAPPING_EXAMPLE = {
+  default: 'default',
+  vip: 'vip',
+};
+
 const REGION_EXAMPLE = {
   default: 'global',
   'gemini-1.5-pro-002': 'europe-west2',
@@ -214,6 +219,7 @@ const EditChannelModal = (props) => {
     upstream_model_update_last_check_time: 0,
     upstream_model_update_last_detected_models: [],
     upstream_model_update_ignored_models: '',
+    upstream_group_mapping: '',
   };
   const [batch, setBatch] = useState(false);
   const [multiToSingle, setMultiToSingle] = useState(false);
@@ -367,6 +373,18 @@ const EditChannelModal = (props) => {
     useState(false);
   const [paramOverrideEditorVisible, setParamOverrideEditorVisible] =
     useState(false);
+  const isGoogleAPICNChannel = useMemo(() => {
+    const tag = String(inputs.tag || '').trim();
+    const name = String(inputs.name || '').trim();
+    const baseUrl = String(inputs.base_url || '').trim();
+    return (
+      tag === 'google-api-cn' ||
+      name === 'google-api.cn' ||
+      baseUrl.includes('google-api.cn') ||
+      baseUrl.includes('gemini-api.cn') ||
+      String(inputs.upstream_group_mapping || '').trim() !== ''
+    );
+  }, [inputs.base_url, inputs.name, inputs.tag, inputs.upstream_group_mapping]);
 
   // 密钥显示状态
   const [keyDisplayState, setKeyDisplayState] = useState({
@@ -907,6 +925,12 @@ const EditChannelModal = (props) => {
           )
             ? parsedSettings.upstream_model_update_ignored_models.join(',')
             : '';
+          data.upstream_group_mapping =
+            parsedSettings.upstream_group_mapping &&
+            typeof parsedSettings.upstream_group_mapping === 'object' &&
+            !Array.isArray(parsedSettings.upstream_group_mapping)
+              ? JSON.stringify(parsedSettings.upstream_group_mapping, null, 2)
+              : '';
         } catch (error) {
           console.error('解析其他设置失败:', error);
           data.azure_responses_version = '';
@@ -925,6 +949,7 @@ const EditChannelModal = (props) => {
           data.upstream_model_update_last_check_time = 0;
           data.upstream_model_update_last_detected_models = [];
           data.upstream_model_update_ignored_models = '';
+          data.upstream_group_mapping = '';
         }
       } else {
         // 兼容历史数据：老渠道没有 settings 时，默认按 json 展示
@@ -942,6 +967,7 @@ const EditChannelModal = (props) => {
         data.upstream_model_update_last_check_time = 0;
         data.upstream_model_update_last_detected_models = [];
         data.upstream_model_update_ignored_models = '';
+        data.upstream_group_mapping = '';
       }
 
       if (
@@ -1011,6 +1037,7 @@ const EditChannelModal = (props) => {
         (data.weight && data.weight !== 0) ||
         (data.proxy && data.proxy.trim()) ||
         (data.system_prompt && data.system_prompt.trim()) ||
+        (data.upstream_group_mapping && data.upstream_group_mapping.trim()) ||
         data.thinking_to_content ||
         data.pass_through_body_enabled ||
         data.force_format ||
@@ -1781,6 +1808,47 @@ const EditChannelModal = (props) => {
       }
     }
 
+    const upstreamGroupMappingRaw = String(
+      localInputs.upstream_group_mapping || '',
+    ).trim();
+    if (upstreamGroupMappingRaw) {
+      if (!verifyJSON(upstreamGroupMappingRaw)) {
+        showInfo(t('上游分组映射必须是合法的 JSON 格式！'));
+        return;
+      }
+      try {
+        const parsedMapping = JSON.parse(upstreamGroupMappingRaw);
+        if (
+          !parsedMapping ||
+          typeof parsedMapping !== 'object' ||
+          Array.isArray(parsedMapping)
+        ) {
+          showInfo(t('上游分组映射必须是 JSON 对象'));
+          return;
+        }
+        const normalizedMapping = {};
+        for (const [platformGroup, upstreamGroup] of Object.entries(
+          parsedMapping,
+        )) {
+          const key = String(platformGroup || '').trim();
+          const value = String(upstreamGroup || '').trim();
+          if (key && value) {
+            normalizedMapping[key] = value;
+          }
+        }
+        if (Object.keys(normalizedMapping).length > 0) {
+          settings.upstream_group_mapping = normalizedMapping;
+        } else if ('upstream_group_mapping' in settings) {
+          delete settings.upstream_group_mapping;
+        }
+      } catch (error) {
+        showInfo(t('上游分组映射必须是合法的 JSON 格式！'));
+        return;
+      }
+    } else if ('upstream_group_mapping' in settings) {
+      delete settings.upstream_group_mapping;
+    }
+
     settings.upstream_model_update_check_enabled =
       localInputs.upstream_model_update_check_enabled === true;
     settings.upstream_model_update_auto_sync_enabled =
@@ -1830,6 +1898,7 @@ const EditChannelModal = (props) => {
     delete localInputs.upstream_model_update_last_check_time;
     delete localInputs.upstream_model_update_last_detected_models;
     delete localInputs.upstream_model_update_ignored_models;
+    delete localInputs.upstream_group_mapping;
 
     let res;
     localInputs.auto_ban = localInputs.auto_ban ? 1 : 0;
@@ -2275,6 +2344,31 @@ const EditChannelModal = (props) => {
                       </>
                     )}
                   </div>
+                  {isGoogleAPICNChannel && (
+                    <JSONEditor
+                      key={`upstream_group_mapping-${isEdit ? channelId : 'new'}`}
+                      field='upstream_group_mapping'
+                      label={t('上游令牌分组映射')}
+                      placeholder={
+                        t(
+                          '本平台分组到 google-api.cn 上游令牌分组的映射，例如：',
+                        ) +
+                        '\n' +
+                        JSON.stringify(UPSTREAM_GROUP_MAPPING_EXAMPLE, null, 2)
+                      }
+                      value={inputs.upstream_group_mapping || ''}
+                      onChange={(value) =>
+                        handleInputChange('upstream_group_mapping', value)
+                      }
+                      template={UPSTREAM_GROUP_MAPPING_EXAMPLE}
+                      templateLabel={t('填入模板')}
+                      editorType='keyValue'
+                      formApi={formApiRef.current}
+                      extraText={t(
+                        '键为本平台分组，值为 google-api.cn 上游令牌分组。仅影响上游 key 选择，不修改本平台分组和计费。',
+                      )}
+                    />
+                  )}
                 </div>
                 )}
 

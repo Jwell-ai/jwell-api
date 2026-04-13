@@ -371,7 +371,8 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	if newAPIError != nil {
 		return newAPIError
 	}
-	if resolvedKey, resolved, err := service.ResolveNewAPIUpstreamAuthToken(c.Request.Context(), channel.GetBaseURL(), key, channel.GetSetting().Proxy); resolved {
+	upstreamAuthGroup := service.ResolveUpstreamAuthGroupForModel(channel.GetOtherSettings(), modelName, getSelectedChannelUsingGroup(c))
+	if resolvedKey, resolved, err := service.ResolveNewAPIUpstreamAuthTokenForGroup(c.Request.Context(), channel.GetBaseURL(), key, channel.GetSetting().Proxy, upstreamAuthGroup); resolved {
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
 		}
@@ -410,6 +411,15 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 		c.Set("bot_id", channel.Other)
 	}
 	return nil
+}
+
+func getSelectedChannelUsingGroup(c *gin.Context) string {
+	if autoGroup, exists := common.GetContextKey(c, constant.ContextKeyAutoGroup); exists {
+		if group, ok := autoGroup.(string); ok && strings.TrimSpace(group) != "" {
+			return strings.TrimSpace(group)
+		}
+	}
+	return strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeyUsingGroup))
 }
 
 // extractModelNameFromGeminiPath 从 Gemini API URL 路径中提取模型名

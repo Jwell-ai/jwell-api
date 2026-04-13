@@ -81,6 +81,14 @@ func main() {
 		}()
 
 		go model.SyncChannelCache(common.SyncFrequency)
+
+		// Initialize group key cache to Redis
+		err := service.InitGroupKeyCache()
+		if err != nil {
+			common.SysError("Failed to initialize group key cache: " + err.Error())
+		}
+		// Start periodic sync for group key cache
+		go service.StartGroupKeyCacheSync(common.SyncFrequency)
 	}
 
 	// 热更新配置

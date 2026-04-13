@@ -65,10 +65,15 @@ func refreshChannelTestUpstreamAuthToken(c *gin.Context, channel *model.Channel,
 		common.SysLog(fmt.Sprintf("channel test upstream auth refresh skipped: channel_id=%d err=%v", channel.Id, newAPIError))
 		return false
 	}
-	if !service.InvalidateNewAPIUpstreamAuthToken(channel.GetBaseURL(), key) {
+	platformGroup := selectedChannelTestUsingGroup(c)
+	upstreamAuthGroup := service.ResolveUpstreamAuthGroupForModel(channel.GetOtherSettings(), info.OriginModelName, platformGroup)
+	if upstreamAuthGroup == "" {
+		upstreamAuthGroup = service.ResolveUpstreamAuthGroupForModel(channel.GetOtherSettings(), info.UpstreamModelName, platformGroup)
+	}
+	if !service.InvalidateNewAPIUpstreamAuthTokenForGroup(channel.GetBaseURL(), key, upstreamAuthGroup) {
 		return false
 	}
-	resolvedKey, resolved, err := service.ResolveNewAPIUpstreamAuthToken(c.Request.Context(), channel.GetBaseURL(), key, channel.GetSetting().Proxy)
+	resolvedKey, resolved, err := service.ResolveNewAPIUpstreamAuthTokenForGroup(c.Request.Context(), channel.GetBaseURL(), key, channel.GetSetting().Proxy, upstreamAuthGroup)
 	if !resolved {
 		return false
 	}
@@ -80,6 +85,15 @@ func refreshChannelTestUpstreamAuthToken(c *gin.Context, channel *model.Channel,
 	info.ApiKey = resolvedKey
 	common.SysLog(fmt.Sprintf("channel test refreshed upstream auth token after 401: channel_id=%d name=%s", channel.Id, channel.Name))
 	return true
+}
+
+func selectedChannelTestUsingGroup(c *gin.Context) string {
+	if autoGroup, exists := common.GetContextKey(c, constant.ContextKeyAutoGroup); exists {
+		if group, ok := autoGroup.(string); ok && strings.TrimSpace(group) != "" {
+			return strings.TrimSpace(group)
+		}
+	}
+	return strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeyUsingGroup))
 }
 
 func testChannel(channel *model.Channel, testModel string, endpointType string, isStream bool) testResult {

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Jwell-ai/jwell-api/common"
+	"github.com/Jwell-ai/jwell-api/dto"
 	"github.com/stretchr/testify/require"
 )
 
@@ -143,6 +144,80 @@ func TestResolveNewAPIUpstreamAuthTokenUsesSeparateAuthBaseURL(t *testing.T) {
 	require.True(t, resolved)
 	require.Equal(t, "sk-upstream", token)
 	require.False(t, apiServerHit)
+}
+
+func TestResolveNewAPIUpstreamAuthTokenForGroupUsesMatchingTokenGroup(t *testing.T) {
+	t.Parallel()
+
+	createdPayloadGroup := ""
+	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/user/login":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"id": 42,
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/token/":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"items": []map[string]any{
+						{"id": 7, "name": "jwell-upstream", "group": "default"},
+						{"id": 8, "name": "jwell-upstream", "group": "vip"},
+					},
+				},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token/8/key":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"key": "sk-vip",
+				},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token/":
+			var payload map[string]any
+			require.NoError(t, common.DecodeJson(r.Body, &payload))
+			createdPayloadGroup = payload["group"].(string)
+			writeNewAPITestJSON(t, w, map[string]any{"success": true, "message": "", "data": map[string]any{}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer authServer.Close()
+
+	rawKey := `{"type":"newapi_login","username":"alice","password":"secret","token_name":"jwell-upstream","group":"default"}`
+	token, resolved, err := ResolveNewAPIUpstreamAuthTokenForGroup(context.Background(), authServer.URL, rawKey, "", "vip")
+	require.NoError(t, err)
+	require.True(t, resolved)
+	require.Equal(t, "sk-vip", token)
+	require.Empty(t, createdPayloadGroup)
+}
+
+func TestResolveUpstreamAuthGroupForModelUsesProviderMetadataOnly(t *testing.T) {
+	settings := dto.ChannelOtherSettings{
+		UpstreamModelGroups: map[string][]string{
+			"gemini-2.5-pro": {"default"},
+			"claude-sonnet":  {"vip", "default"},
+		},
+		UpstreamGroupMapping: map[string]string{
+			"default": "default",
+			"vip":     "vip",
+			"svip":    "vip",
+			"staff":   "not-model-group",
+		},
+	}
+
+	require.Equal(t, "default", ResolveUpstreamAuthGroupForModel(settings, "gemini-2.5-pro", "vip"))
+	require.Equal(t, "vip", ResolveUpstreamAuthGroupForModel(settings, "claude-sonnet", "svip"))
+	require.Equal(t, "vip", ResolveUpstreamAuthGroupForModel(settings, "claude-sonnet", "staff"))
+	require.Equal(t, "vip", ResolveUpstreamAuthGroupForModel(settings, "gpt-4o", "vip"))
+	require.Empty(t, ResolveUpstreamAuthGroupForModel(settings, "gpt-4o", "unknown"))
 }
 
 func TestResolveNewAPIUpstreamAuthTokenSupportsGetKeyFallback(t *testing.T) {
@@ -285,6 +360,62 @@ func TestInvalidateNewAPIUpstreamAuthToken(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, resolved)
 	require.Equal(t, "sk-2", token)
+}
+
+func TestInvalidateNewAPIUpstreamAuthTokenForGroup(t *testing.T) {
+	t.Parallel()
+
+	keyFetchCount := 0
+	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/user/login":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"id": 42,
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/token/":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"items": []map[string]any{
+						{"id": 7, "name": "jwell-upstream", "group": "default"},
+						{"id": 8, "name": "jwell-upstream", "group": "vip"},
+					},
+				},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token/8/key":
+			keyFetchCount++
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"key": fmt.Sprintf("sk-vip-%d", keyFetchCount),
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer authServer.Close()
+
+	rawKey := `{"type":"newapi_login","username":"alice","password":"secret","token_name":"jwell-upstream","group":"default"}`
+	token, resolved, err := ResolveNewAPIUpstreamAuthTokenForGroup(context.Background(), authServer.URL, rawKey, "", "vip")
+	require.NoError(t, err)
+	require.True(t, resolved)
+	require.Equal(t, "sk-vip-1", token)
+
+	require.False(t, InvalidateNewAPIUpstreamAuthToken(authServer.URL, rawKey))
+	require.True(t, InvalidateNewAPIUpstreamAuthTokenForGroup(authServer.URL, rawKey, "vip"))
+
+	token, resolved, err = ResolveNewAPIUpstreamAuthTokenForGroup(context.Background(), authServer.URL, rawKey, "", "vip")
+	require.NoError(t, err)
+	require.True(t, resolved)
+	require.Equal(t, "sk-vip-2", token)
 }
 
 func TestParseNewAPIUpstreamAuthConfigGoogleProfileUsesEnv(t *testing.T) {

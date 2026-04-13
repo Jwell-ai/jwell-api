@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -33,9 +34,16 @@ type googleAPICNBootstrapConfig struct {
 	Name                   string
 	Tag                    string
 	Group                  string
+	UpstreamTokenGroup     string
+	UpstreamGroupMapping   map[string]string
 	BootstrapModels        []string
 	AutoRegisterModelRatio bool
 	DefaultModelRatio      float64
+}
+
+type googleAPICNModelInfo struct {
+	Name   string
+	Groups []string
 }
 
 // StartGoogleAPICNBootstrapTask creates or updates the shared google-api.cn
@@ -91,13 +99,18 @@ func loadGoogleAPICNBootstrapConfig() (googleAPICNBootstrapConfig, bool) {
 	}
 
 	return googleAPICNBootstrapConfig{
-		BaseURL:         baseURL,
-		AuthBaseURL:     authBaseURL,
-		PricingURL:      strings.TrimRight(pricingURL, "/"),
-		Name:            strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_CHANNEL_NAME", googleAPICNDefaultName)),
-		Tag:             strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_CHANNEL_TAG", googleAPICNDefaultTag)),
-		Group:           strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_CHANNEL_GROUP", googleAPICNDefaultGroup)),
-		BootstrapModels: normalizeModelNames(strings.Split(common.GetEnvOrDefaultString("GOOGLE_API_CN_BOOTSTRAP_MODELS", ""), ",")),
+		BaseURL:     baseURL,
+		AuthBaseURL: authBaseURL,
+		PricingURL:  strings.TrimRight(pricingURL, "/"),
+		Name:        strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_CHANNEL_NAME", googleAPICNDefaultName)),
+		Tag:         strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_CHANNEL_TAG", googleAPICNDefaultTag)),
+		Group:       strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_CHANNEL_GROUP", googleAPICNDefaultGroup)),
+		UpstreamTokenGroup: strings.TrimSpace(common.GetEnvOrDefaultString(
+			"GOOGLE_API_CN_GROUP",
+			googleAPICNDefaultGroup,
+		)),
+		UpstreamGroupMapping: parseGoogleAPICNGroupMapping(common.GetEnvOrDefaultString("GOOGLE_API_CN_GROUP_MAPPING", "")),
+		BootstrapModels:      normalizeModelNames(strings.Split(common.GetEnvOrDefaultString("GOOGLE_API_CN_BOOTSTRAP_MODELS", ""), ",")),
 		AutoRegisterModelRatio: common.GetEnvOrDefaultBool(
 			"GOOGLE_API_CN_AUTO_REGISTER_MODEL_RATIO_ENABLED",
 			true,
@@ -128,6 +141,14 @@ func ensureGoogleAPICNChannel(ctx context.Context, cfg googleAPICNBootstrapConfi
 	}
 	if cfg.Group == "" {
 		cfg.Group = googleAPICNDefaultGroup
+	}
+	if cfg.UpstreamTokenGroup == "" {
+		cfg.UpstreamTokenGroup = googleAPICNDefaultGroup
+	}
+	if len(cfg.UpstreamGroupMapping) == 0 {
+		cfg.UpstreamGroupMapping = map[string]string{
+			cfg.Group: cfg.UpstreamTokenGroup,
+		}
 	}
 	if cfg.AuthBaseURL == "" {
 		cfg.AuthBaseURL = googleAPICNDefaultAuthBaseURL
@@ -181,15 +202,19 @@ func createGoogleAPICNChannel(ctx context.Context, cfg googleAPICNBootstrapConfi
 		Tag:         common.GetPointer(cfg.Tag),
 	}
 	setGoogleAPICNUpstreamModelSettings(&channel)
+	setGoogleAPICNUpstreamGroupMapping(&channel, cfg.UpstreamGroupMapping)
 
-	models, err := fetchGoogleAPICNModels(ctx, &channel)
+	modelInfos, err := fetchGoogleAPICNModelInfos(ctx, &channel, cfg)
 	if err != nil {
-		models = cfg.BootstrapModels
-		if len(models) == 0 {
+		modelInfos = googleAPICNModelInfosFromNames(cfg.BootstrapModels, cfg.UpstreamTokenGroup)
+		if len(modelInfos) == 0 {
 			return fmt.Errorf("fetch upstream models failed and GOOGLE_API_CN_BOOTSTRAP_MODELS is empty: %w", err)
 		}
 		common.SysError("google-api.cn model fetch failed, using GOOGLE_API_CN_BOOTSTRAP_MODELS: " + err.Error())
 	}
+	models := googleAPICNModelInfoNames(modelInfos)
+	upstreamModelGroups := googleAPICNModelInfoGroups(modelInfos, cfg.UpstreamTokenGroup)
+	setGoogleAPICNUpstreamModelGroups(&channel, upstreamModelGroups)
 	channel.Models = strings.Join(models, ",")
 	if err := ensureGoogleAPICNModelRatios(models, cfg); err != nil {
 		return err
@@ -230,23 +255,23 @@ func syncGoogleAPICNChannel(ctx context.Context, channel *model.Channel, cfg goo
 	if strings.TrimSpace(channel.Name) == "" {
 		channel.Name = cfg.Name
 	}
-	groupChanged := false
-	if strings.TrimSpace(channel.Group) == "" {
-		channel.Group = cfg.Group
-		groupChanged = true
-	}
 	setGoogleAPICNUpstreamModelSettings(channel)
+	setGoogleAPICNUpstreamGroupMapping(channel, cfg.UpstreamGroupMapping)
 
-	models, err := fetchGoogleAPICNModels(ctx, channel)
+	modelInfos, err := fetchGoogleAPICNModelInfos(ctx, channel, cfg)
 	if err != nil {
-		models = cfg.BootstrapModels
-		if len(models) == 0 {
+		modelInfos = googleAPICNModelInfosFromNames(cfg.BootstrapModels, cfg.UpstreamTokenGroup)
+		if len(modelInfos) == 0 {
 			return fmt.Errorf("fetch upstream models failed and GOOGLE_API_CN_BOOTSTRAP_MODELS is empty: %w", err)
 		}
 		common.SysError("google-api.cn model fetch failed, using GOOGLE_API_CN_BOOTSTRAP_MODELS: " + err.Error())
 	}
 
+	models := googleAPICNModelInfoNames(modelInfos)
+	upstreamModelGroups := googleAPICNModelInfoGroups(modelInfos, cfg.UpstreamTokenGroup)
 	mergedModels := mergeModelNames(channel.GetModels(), models)
+	mergedUpstreamModelGroups := googleAPICNMergeModelGroups(mergedModels, upstreamModelGroups, cfg.UpstreamTokenGroup)
+	setGoogleAPICNUpstreamModelGroups(channel, mergedUpstreamModelGroups)
 	modelsChanged := strings.Join(normalizeModelNames(channel.GetModels()), ",") != strings.Join(mergedModels, ",")
 	channel.Models = strings.Join(mergedModels, ",")
 	if err := ensureGoogleAPICNModelRatios(models, cfg); err != nil {
@@ -256,7 +281,7 @@ func syncGoogleAPICNChannel(ctx context.Context, channel *model.Channel, cfg goo
 		return err
 	}
 	tagChanged := originTag != channel.GetTag()
-	abilitiesChanged := modelsChanged || groupChanged || tagChanged
+	abilitiesChanged := modelsChanged || tagChanged
 
 	updates := map[string]interface{}{
 		"name":     channel.Name,
@@ -268,9 +293,6 @@ func syncGoogleAPICNChannel(ctx context.Context, channel *model.Channel, cfg goo
 	}
 	if shouldOwnChannelKey {
 		updates["key"] = channel.Key
-	}
-	if channel.Group != "" {
-		updates["group"] = channel.Group
 	}
 	if modelsChanged {
 		updates["models"] = channel.Models
@@ -295,6 +317,135 @@ func setGoogleAPICNUpstreamModelSettings(channel *model.Channel) {
 	settings.UpstreamModelUpdateCheckEnabled = true
 	settings.UpstreamModelUpdateAutoSyncEnabled = true
 	channel.SetOtherSettings(settings)
+}
+
+func setGoogleAPICNUpstreamGroupMapping(channel *model.Channel, mapping map[string]string) {
+	if channel == nil {
+		return
+	}
+	settings := channel.GetOtherSettings()
+	settings.UpstreamGroupMapping = mapping
+	channel.SetOtherSettings(settings)
+}
+
+func setGoogleAPICNUpstreamModelGroups(channel *model.Channel, modelGroups map[string][]string) {
+	if channel == nil {
+		return
+	}
+	settings := channel.GetOtherSettings()
+	settings.UpstreamModelGroups = modelGroups
+	channel.SetOtherSettings(settings)
+}
+
+func parseGoogleAPICNGroupMapping(raw string) map[string]string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	mapping := make(map[string]string)
+	if err := common.UnmarshalJsonStr(raw, &mapping); err != nil {
+		common.SysError("failed to parse GOOGLE_API_CN_GROUP_MAPPING: " + err.Error())
+		return nil
+	}
+	normalized := make(map[string]string, len(mapping))
+	for platformGroup, upstreamGroup := range mapping {
+		platformGroup = strings.TrimSpace(platformGroup)
+		upstreamGroup = strings.TrimSpace(upstreamGroup)
+		if platformGroup == "" || upstreamGroup == "" {
+			continue
+		}
+		normalized[platformGroup] = upstreamGroup
+	}
+	return normalized
+}
+
+func syncGoogleAPICNChannelUpstreamGroupsFromPricing(ctx context.Context, channel *model.Channel) error {
+	cfg, ok := loadGoogleAPICNBootstrapConfig()
+	if !ok || !googleAPICNConfigMatchesChannel(channel, cfg) {
+		return nil
+	}
+	modelInfos, err := fetchGoogleAPICNModelInfos(ctx, channel, cfg)
+	if err != nil {
+		return err
+	}
+	upstreamModelGroups := googleAPICNMergeModelGroups(channel.GetModels(), googleAPICNModelInfoGroups(modelInfos, cfg.UpstreamTokenGroup), cfg.UpstreamTokenGroup)
+	setGoogleAPICNUpstreamGroupMapping(channel, cfg.UpstreamGroupMapping)
+	setGoogleAPICNUpstreamModelGroups(channel, upstreamModelGroups)
+	return model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Update("settings", channel.OtherSettings).Error
+}
+
+func fetchGoogleAPICNModelInfos(ctx context.Context, channel *model.Channel, cfg googleAPICNBootstrapConfig) ([]googleAPICNModelInfo, error) {
+	if googleAPICNConfigMatchesChannel(channel, cfg) {
+		modelInfos, err := fetchGoogleAPICNPricingModelInfos(ctx, cfg, channel.GetSetting().Proxy)
+		if err == nil {
+			return modelInfos, nil
+		}
+		common.SysError("google-api.cn pricing model fetch failed, falling back to API models: " + err.Error())
+	}
+
+	models, err := fetchGoogleAPICNModels(ctx, channel)
+	if err != nil {
+		return nil, err
+	}
+	return googleAPICNModelInfosFromNames(models, cfg.UpstreamTokenGroup), nil
+}
+
+func googleAPICNModelInfosFromNames(models []string, fallbackGroup string) []googleAPICNModelInfo {
+	names := normalizeModelNames(models)
+	modelInfos := make([]googleAPICNModelInfo, 0, len(names))
+	for _, name := range names {
+		modelInfos = append(modelInfos, googleAPICNModelInfo{
+			Name:   name,
+			Groups: googleAPICNNormalizeGroups(nil, fallbackGroup),
+		})
+	}
+	return modelInfos
+}
+
+func googleAPICNModelInfoNames(modelInfos []googleAPICNModelInfo) []string {
+	names := make([]string, 0, len(modelInfos))
+	for _, item := range modelInfos {
+		names = append(names, item.Name)
+	}
+	return normalizeModelNames(names)
+}
+
+func googleAPICNModelInfoGroups(modelInfos []googleAPICNModelInfo, fallbackGroup string) map[string][]string {
+	modelGroups := make(map[string][]string, len(modelInfos))
+	for _, item := range modelInfos {
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			continue
+		}
+		modelGroups[name] = mergeModelNames(modelGroups[name], googleAPICNNormalizeGroups(item.Groups, fallbackGroup))
+	}
+	return modelGroups
+}
+
+func googleAPICNMergeModelGroups(models []string, modelGroups map[string][]string, fallbackGroup string) map[string][]string {
+	merged := make(map[string][]string, len(models))
+	for modelName, groups := range modelGroups {
+		merged[modelName] = googleAPICNNormalizeGroups(groups, fallbackGroup)
+	}
+	for _, modelName := range normalizeModelNames(models) {
+		if len(merged[modelName]) == 0 {
+			merged[modelName] = googleAPICNNormalizeGroups(nil, fallbackGroup)
+		}
+	}
+	return merged
+}
+
+func googleAPICNNormalizeGroups(groups []string, fallbackGroup string) []string {
+	normalized := normalizeModelNames(groups)
+	if len(normalized) == 0 {
+		fallbackGroup = strings.TrimSpace(fallbackGroup)
+		if fallbackGroup == "" {
+			fallbackGroup = googleAPICNDefaultGroup
+		}
+		normalized = []string{fallbackGroup}
+	}
+	sort.Strings(normalized)
+	return normalized
 }
 
 func ensureGoogleAPICNModelRatios(models []string, cfg googleAPICNBootstrapConfig) error {
@@ -599,6 +750,14 @@ func fetchGoogleAPICNModels(ctx context.Context, channel *model.Channel) ([]stri
 }
 
 func fetchGoogleAPICNPricingModels(ctx context.Context, cfg googleAPICNBootstrapConfig, proxy string) ([]string, error) {
+	modelInfos, err := fetchGoogleAPICNPricingModelInfos(ctx, cfg, proxy)
+	if err != nil {
+		return nil, err
+	}
+	return googleAPICNModelInfoNames(modelInfos), nil
+}
+
+func fetchGoogleAPICNPricingModelInfos(ctx context.Context, cfg googleAPICNBootstrapConfig, proxy string) ([]googleAPICNModelInfo, error) {
 	if strings.TrimSpace(cfg.PricingURL) == "" {
 		return nil, errors.New("google-api.cn pricing url is empty")
 	}
@@ -608,17 +767,28 @@ func fetchGoogleAPICNPricingModels(ctx context.Context, cfg googleAPICNBootstrap
 	if err != nil {
 		return nil, err
 	}
-	models, err := parseGoogleAPICNPricingModels(body)
+	modelInfos, err := parseGoogleAPICNPricingModelInfos(body)
 	if err != nil {
 		return nil, err
 	}
-	if len(models) == 0 {
+	if len(modelInfos) == 0 {
 		return nil, fmt.Errorf("google-api.cn pricing returned no models: %s", cfg.PricingURL)
 	}
-	return models, nil
+	for i := range modelInfos {
+		modelInfos[i].Groups = googleAPICNNormalizeGroups(modelInfos[i].Groups, cfg.UpstreamTokenGroup)
+	}
+	return modelInfos, nil
 }
 
 func parseGoogleAPICNPricingModels(body []byte) ([]string, error) {
+	modelInfos, err := parseGoogleAPICNPricingModelInfos(body)
+	if err != nil {
+		return nil, err
+	}
+	return googleAPICNModelInfoNames(modelInfos), nil
+}
+
+func parseGoogleAPICNPricingModelInfos(body []byte) ([]googleAPICNModelInfo, error) {
 	var payload any
 	if err := common.Unmarshal(body, &payload); err != nil {
 		limited := strings.TrimSpace(string(body))
@@ -627,27 +797,41 @@ func parseGoogleAPICNPricingModels(body []byte) ([]string, error) {
 		}
 		return nil, fmt.Errorf("decode google-api.cn pricing response failed: %w; body: %s", err, limited)
 	}
-	models := collectGoogleAPICNPricingModelNames(payload)
-	return normalizeModelNames(models), nil
+	return normalizeGoogleAPICNPricingModelInfos(collectGoogleAPICNPricingModelInfos(payload, nil)), nil
 }
 
-func collectGoogleAPICNPricingModelNames(value any) []string {
+func collectGoogleAPICNPricingModelInfos(value any, inheritedGroups []string) []googleAPICNModelInfo {
 	switch typed := value.(type) {
+	case string:
+		name := strings.TrimSpace(typed)
+		if name == "" {
+			return nil
+		}
+		return []googleAPICNModelInfo{{Name: name, Groups: inheritedGroups}}
 	case []any:
-		models := make([]string, 0, len(typed))
+		models := make([]googleAPICNModelInfo, 0, len(typed))
 		for _, item := range typed {
-			models = append(models, collectGoogleAPICNPricingModelNames(item)...)
+			models = append(models, collectGoogleAPICNPricingModelInfos(item, inheritedGroups)...)
 		}
 		return models
 	case map[string]any:
 		if modelName, ok := googleAPICNPricingModelNameFromMap(typed); ok {
-			return []string{modelName}
-		}
-		models := make([]string, 0)
-		for _, key := range []string{"data", "items", "models", "list"} {
-			if nested, ok := typed[key]; ok {
-				models = append(models, collectGoogleAPICNPricingModelNames(nested)...)
+			groups := googleAPICNPricingModelGroupsFromMap(typed)
+			if len(groups) == 0 {
+				groups = inheritedGroups
 			}
+			return []googleAPICNModelInfo{{Name: modelName, Groups: groups}}
+		}
+		models := make([]googleAPICNModelInfo, 0)
+		for key, nested := range typed {
+			if !googleAPICNPricingMapKeyCanContainModels(key, nested) {
+				continue
+			}
+			nextGroups := inheritedGroups
+			if googleAPICNPricingMapKeyLooksLikeGroup(key) {
+				nextGroups = mergeModelNames(nextGroups, []string{key})
+			}
+			models = append(models, collectGoogleAPICNPricingModelInfos(nested, nextGroups)...)
 		}
 		return models
 	default:
@@ -662,4 +846,123 @@ func googleAPICNPricingModelNameFromMap(item map[string]any) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func googleAPICNPricingModelGroupsFromMap(item map[string]any) []string {
+	groups := make([]string, 0)
+	for _, key := range []string{
+		"group",
+		"groups",
+		"enable_group",
+		"enable_groups",
+		"available_group",
+		"available_groups",
+		"model_group",
+		"model_groups",
+		"token_group",
+		"token_groups",
+	} {
+		if value, ok := item[key]; ok {
+			groups = mergeModelNames(groups, googleAPICNPricingGroupsFromValue(value))
+		}
+	}
+	return normalizeModelNames(groups)
+}
+
+func googleAPICNPricingGroupsFromValue(value any) []string {
+	switch typed := value.(type) {
+	case string:
+		return normalizeModelNames(strings.FieldsFunc(typed, func(r rune) bool {
+			return r == ',' || r == ';' || r == '|'
+		}))
+	case []any:
+		groups := make([]string, 0, len(typed))
+		for _, item := range typed {
+			groups = mergeModelNames(groups, googleAPICNPricingGroupsFromValue(item))
+		}
+		return groups
+	case []string:
+		return normalizeModelNames(typed)
+	case map[string]any:
+		groups := make([]string, 0, len(typed))
+		for key, enabled := range typed {
+			switch v := enabled.(type) {
+			case bool:
+				if v {
+					groups = append(groups, key)
+				}
+			case string:
+				if strings.TrimSpace(v) != "" && strings.TrimSpace(v) != "false" {
+					groups = append(groups, key)
+				}
+			}
+		}
+		return normalizeModelNames(groups)
+	default:
+		return nil
+	}
+}
+
+func googleAPICNPricingMapKeyCanContainModels(key string, value any) bool {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return false
+	}
+	switch key {
+	case "success", "message", "error", "code", "vendor", "vendor_name", "provider", "provider_name",
+		"display_name", "description", "object", "type", "tags", "price", "prices", "pricing", "model_price",
+		"model_prices", "ratio", "created", "created_at", "updated", "updated_at":
+		return false
+	case "data", "items", "models", "list", "children", "model_list":
+		return true
+	}
+	switch value.(type) {
+	case []any, []string, map[string]any:
+		return true
+	case string:
+		return googleAPICNPricingMapKeyLooksLikeGroup(key)
+	default:
+		return false
+	}
+}
+
+func googleAPICNPricingMapKeyLooksLikeGroup(key string) bool {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return false
+	}
+	switch key {
+	case "success", "message", "error", "code", "data", "items", "models", "list", "prices", "pricing",
+		"model_prices", "providers", "provider", "provider_name", "vendor", "vendor_name", "display_name",
+		"description", "object", "type", "tags", "price", "model_price", "ratio", "created", "created_at",
+		"updated", "updated_at", "children", "model_list":
+		return false
+	}
+	if _, err := strconv.Atoi(key); err == nil {
+		return false
+	}
+	return !strings.ContainsAny(key, " \t\r\n/")
+}
+
+func normalizeGoogleAPICNPricingModelInfos(modelInfos []googleAPICNModelInfo) []googleAPICNModelInfo {
+	modelGroups := make(map[string][]string, len(modelInfos))
+	names := make([]string, 0, len(modelInfos))
+	for _, item := range modelInfos {
+		name := strings.TrimSpace(item.Name)
+		if name == "" {
+			continue
+		}
+		if _, ok := modelGroups[name]; !ok {
+			names = append(names, name)
+		}
+		modelGroups[name] = mergeModelNames(modelGroups[name], item.Groups)
+	}
+	result := make([]googleAPICNModelInfo, 0, len(names))
+	for _, name := range normalizeModelNames(names) {
+		result = append(result, googleAPICNModelInfo{
+			Name:   name,
+			Groups: normalizeModelNames(modelGroups[name]),
+		})
+	}
+	return result
 }

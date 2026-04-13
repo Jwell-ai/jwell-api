@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Jwell-ai/jwell-api/common"
+	"github.com/Jwell-ai/jwell-api/dto"
 )
 
 const (
@@ -133,9 +134,58 @@ func applyNewAPIUpstreamAuthEnv(cfg *NewAPIUpstreamAuthConfig) {
 }
 
 func ResolveNewAPIUpstreamAuthToken(ctx context.Context, baseURL string, rawKey string, proxy string) (string, bool, error) {
+	return resolveNewAPIUpstreamAuthToken(ctx, baseURL, rawKey, proxy, "")
+}
+
+func ResolveNewAPIUpstreamAuthTokenForGroup(ctx context.Context, baseURL string, rawKey string, proxy string, group string) (string, bool, error) {
+	return resolveNewAPIUpstreamAuthToken(ctx, baseURL, rawKey, proxy, group)
+}
+
+func ResolveUpstreamAuthGroupForModel(settings dto.ChannelOtherSettings, modelName string, platformGroup string) string {
+	modelName = strings.TrimSpace(modelName)
+	platformGroup = strings.TrimSpace(platformGroup)
+	modelGroups := make([]string, 0)
+	if modelName != "" && len(settings.UpstreamModelGroups) > 0 {
+		modelGroups = settings.UpstreamModelGroups[modelName]
+	}
+
+	if platformGroup != "" && len(settings.UpstreamGroupMapping) > 0 {
+		if upstreamGroup := strings.TrimSpace(settings.UpstreamGroupMapping[platformGroup]); upstreamGroup != "" && upstreamGroupAllowedForModel(upstreamGroup, modelGroups) {
+			return upstreamGroup
+		}
+	}
+
+	for _, group := range modelGroups {
+		if group = strings.TrimSpace(group); group != "" {
+			return group
+		}
+	}
+	return ""
+}
+
+func upstreamGroupAllowedForModel(group string, modelGroups []string) bool {
+	group = strings.TrimSpace(group)
+	if group == "" {
+		return false
+	}
+	if len(modelGroups) == 0 {
+		return true
+	}
+	for _, modelGroup := range modelGroups {
+		if strings.TrimSpace(modelGroup) == group {
+			return true
+		}
+	}
+	return false
+}
+
+func resolveNewAPIUpstreamAuthToken(ctx context.Context, baseURL string, rawKey string, proxy string, group string) (string, bool, error) {
 	cfg, ok, err := ParseNewAPIUpstreamAuthConfig(rawKey)
 	if err != nil || !ok {
 		return rawKey, ok, err
+	}
+	if group = strings.TrimSpace(group); group != "" && group != "auto" {
+		cfg.Group = group
 	}
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
@@ -177,12 +227,13 @@ func LogNewAPIUpstreamAuthTokenDebug(source string, apiBaseURL string, authBaseU
 		return
 	}
 	common.SysLog(fmt.Sprintf(
-		"newapi upstream auth token debug: source=%s profile=%s api_base_url=%s auth_base_url=%s token_name=%s token=%s",
+		"newapi upstream auth token debug: source=%s profile=%s api_base_url=%s auth_base_url=%s token_name=%s group=%s token=%s",
 		source,
 		cfg.Profile,
 		strings.TrimRight(strings.TrimSpace(apiBaseURL), "/"),
 		strings.TrimRight(strings.TrimSpace(authBaseURL), "/"),
 		cfg.TokenName,
+		cfg.Group,
 		NewAPIUpstreamAuthTokenDebugSummary(token),
 	))
 }
@@ -213,9 +264,20 @@ func maskNewAPIUpstreamAuthToken(token string) string {
 }
 
 func InvalidateNewAPIUpstreamAuthToken(baseURL string, rawKey string) bool {
+	return invalidateNewAPIUpstreamAuthToken(baseURL, rawKey, "")
+}
+
+func InvalidateNewAPIUpstreamAuthTokenForGroup(baseURL string, rawKey string, group string) bool {
+	return invalidateNewAPIUpstreamAuthToken(baseURL, rawKey, group)
+}
+
+func invalidateNewAPIUpstreamAuthToken(baseURL string, rawKey string, group string) bool {
 	cfg, ok, err := ParseNewAPIUpstreamAuthConfig(rawKey)
 	if err != nil || !ok {
 		return false
+	}
+	if group = strings.TrimSpace(group); group != "" && group != "auto" {
+		cfg.Group = group
 	}
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	authBaseURL := cfg.AuthBaseURL
@@ -258,8 +320,9 @@ type newAPIUserLoginData struct {
 }
 
 type newAPITokenItem struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
+	ID    int    `json:"id"`
+	Name  string `json:"name"`
+	Group string `json:"group"`
 }
 
 type newAPITokenPage struct {
@@ -339,7 +402,7 @@ func fetchNewAPIUpstreamToken(ctx context.Context, baseURL string, cfg NewAPIUps
 		return "", errors.New("newapi upstream login returned invalid user id")
 	}
 
-	tokenID, err := findNewAPIUpstreamToken(ctx, client, baseURL, userID, cfg.TokenName)
+	tokenID, err := findNewAPIUpstreamToken(ctx, client, baseURL, userID, cfg.TokenName, cfg.Group)
 	if err != nil {
 		return "", err
 	}
@@ -347,7 +410,7 @@ func fetchNewAPIUpstreamToken(ctx context.Context, baseURL string, cfg NewAPIUps
 		if err = createNewAPIUpstreamToken(ctx, client, baseURL, userID, cfg); err != nil {
 			return "", err
 		}
-		tokenID, err = findNewAPIUpstreamToken(ctx, client, baseURL, userID, cfg.TokenName)
+		tokenID, err = findNewAPIUpstreamToken(ctx, client, baseURL, userID, cfg.TokenName, cfg.Group)
 		if err != nil {
 			return "", err
 		}
@@ -399,7 +462,7 @@ func loginNewAPIUpstream(ctx context.Context, client *http.Client, baseURL strin
 	return result.Data.ID, nil
 }
 
-func findNewAPIUpstreamToken(ctx context.Context, client *http.Client, baseURL string, userID int, tokenName string) (int, error) {
+func findNewAPIUpstreamToken(ctx context.Context, client *http.Client, baseURL string, userID int, tokenName string, group string) (int, error) {
 	var result newAPIResponse[newAPITokenPage]
 	if err := doNewAPIJSON(ctx, client, http.MethodGet, baseURL+"/api/token/?p=1&size=100", userID, nil, &result); err != nil {
 		return 0, err
@@ -407,10 +470,24 @@ func findNewAPIUpstreamToken(ctx context.Context, client *http.Client, baseURL s
 	if !result.Success {
 		return 0, fmt.Errorf("newapi upstream token list failed: %s", result.Message)
 	}
+	var nameOnlyMatch int
 	for _, item := range result.Data.Items {
-		if item.Name == tokenName {
+		if item.Name != tokenName {
+			continue
+		}
+		itemGroup := strings.TrimSpace(item.Group)
+		if itemGroup == "" {
+			if nameOnlyMatch == 0 {
+				nameOnlyMatch = item.ID
+			}
+			continue
+		}
+		if itemGroup == group {
 			return item.ID, nil
 		}
+	}
+	if nameOnlyMatch != 0 {
+		return nameOnlyMatch, nil
 	}
 	return 0, nil
 }

@@ -402,6 +402,9 @@ func checkAndPersistChannelUpstreamModelUpdates(
 		return false, autoAdded, err
 	}
 	if modelsChanged {
+		if err = syncGoogleAPICNChannelUpstreamGroupsFromPricing(context.Background(), channel); err != nil {
+			return true, autoAdded, err
+		}
 		if err = channel.UpdateAbilities(nil); err != nil {
 			return true, autoAdded, err
 		}
@@ -829,6 +832,9 @@ func applyChannelUpstreamModelUpdates(
 	}
 
 	if modelsChanged {
+		if err := syncGoogleAPICNChannelUpstreamGroupsFromPricing(context.Background(), channel); err != nil {
+			return addModels, removeModels, remainingModels, remainingRemoveModels, true, err
+		}
 		if err := channel.UpdateAbilities(nil); err != nil {
 			return addModels, removeModels, remainingModels, remainingRemoveModels, true, err
 		}

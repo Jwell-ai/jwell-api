@@ -54,8 +54,8 @@ func TestParseGoogleAPICNPricingModels(t *testing.T) {
 		"success": true,
 		"data": [
 			{"model_name": " gpt-4o "},
-			{"model": "claude-3-5-sonnet"},
-			{"id": "gemini-2.5-pro"},
+			{"model": "claude-3-5-sonnet", "group": "vip"},
+			{"id": "gemini-2.5-pro", "groups": ["default", "gemini"]},
 			{"vendor": "ignored"}
 		]
 	}`)
@@ -64,6 +64,43 @@ func TestParseGoogleAPICNPricingModels(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"gpt-4o", "claude-3-5-sonnet", "gemini-2.5-pro"}, models)
+
+	modelInfos, err := parseGoogleAPICNPricingModelInfos(body)
+	require.NoError(t, err)
+	require.Equal(t, []googleAPICNModelInfo{
+		{Name: "gpt-4o", Groups: []string{}},
+		{Name: "claude-3-5-sonnet", Groups: []string{"vip"}},
+		{Name: "gemini-2.5-pro", Groups: []string{"default", "gemini"}},
+	}, modelInfos)
+}
+
+func TestParseGoogleAPICNPricingModelInfosInheritsGroupKeys(t *testing.T) {
+	body := []byte(`{
+		"success": true,
+		"data": {
+			"default": ["gpt-4o"],
+			"vip": [{"model": "claude-3-5-sonnet"}],
+			"1": ["ignored-channel-type"]
+		}
+	}`)
+
+	modelInfos, err := parseGoogleAPICNPricingModelInfos(body)
+
+	require.NoError(t, err)
+	require.Equal(t, []googleAPICNModelInfo{
+		{Name: "gpt-4o", Groups: []string{"default"}},
+		{Name: "claude-3-5-sonnet", Groups: []string{"vip"}},
+		{Name: "ignored-channel-type", Groups: []string{}},
+	}, modelInfos)
+}
+
+func TestParseGoogleAPICNGroupMapping(t *testing.T) {
+	result := parseGoogleAPICNGroupMapping(`{"default":"default","vip":"pro"," ":"ignored","empty":" "}`)
+
+	require.Equal(t, map[string]string{
+		"default": "default",
+		"vip":     "pro",
+	}, result)
 }
 
 func TestGoogleAPICNModelEndpointTypes(t *testing.T) {
