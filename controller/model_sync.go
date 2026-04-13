@@ -380,6 +380,7 @@ func SyncUpstreamModels(c *gin.Context) {
 			VendorID:    vendorID,
 			Status:      chooseStatus(up.Status, 1),
 			NameRule:    up.NameRule,
+			Endpoints:   string(up.Endpoints),
 		}
 		if err := mi.Insert(); err == nil {
 			createdModels++
@@ -435,6 +436,10 @@ func SyncUpstreamModels(c *gin.Context) {
 				}
 				if containsField(ow.Fields, "status") {
 					local.Status = chooseStatus(up.Status, local.Status)
+					needUpdate = true
+				}
+				if containsField(ow.Fields, "endpoints") {
+					local.Endpoints = string(up.Endpoints)
 					needUpdate = true
 				}
 				if !needUpdate {
