@@ -266,6 +266,84 @@ func TestResolveNewAPIUpstreamAuthTokenForGroupIgnoresNameOnlyTokenForDifferentG
 	require.Equal(t, "vip", createdPayloadGroup)
 }
 
+func TestEnsureNewAPIUpstreamAuthTokensForGroupsCreatesAndCachesGroupTokens(t *testing.T) {
+	loginCount := 0
+	nextTokenID := 10
+	tokenIDByGroup := map[string]int{
+		"default": 7,
+	}
+	groupByTokenID := map[int]string{
+		7: "default",
+	}
+	createdGroups := make([]string, 0)
+	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/user/login":
+			loginCount++
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"id": 42,
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/token/":
+			items := make([]map[string]any, 0, len(tokenIDByGroup))
+			for group, id := range tokenIDByGroup {
+				items = append(items, map[string]any{"id": id, "name": "jwell-upstream", "group": group})
+			}
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"items": items,
+				},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token/":
+			var payload map[string]any
+			require.NoError(t, common.DecodeJson(r.Body, &payload))
+			group := payload["group"].(string)
+			createdGroups = append(createdGroups, group)
+			tokenIDByGroup[group] = nextTokenID
+			groupByTokenID[nextTokenID] = group
+			nextTokenID++
+			writeNewAPITestJSON(t, w, map[string]any{"success": true, "message": "", "data": map[string]any{}})
+		default:
+			var tokenID int
+			if r.Method == http.MethodPost {
+				_, _ = fmt.Sscanf(r.URL.Path, "/api/token/%d/key", &tokenID)
+			}
+			if group := groupByTokenID[tokenID]; tokenID > 0 && group != "" {
+				writeNewAPITestJSON(t, w, map[string]any{
+					"success": true,
+					"message": "",
+					"data": map[string]any{
+						"key": "sk-" + group,
+					},
+				})
+				return
+			}
+			http.NotFound(w, r)
+		}
+	}))
+	defer authServer.Close()
+
+	rawKey := `{"type":"newapi_login","username":"alice","password":"secret","token_name":"jwell-upstream","group":"default"}`
+	count, resolved, err := EnsureNewAPIUpstreamAuthTokensForGroups(context.Background(), authServer.URL, rawKey, "", []string{" default ", "vip", "vip", " "})
+	require.NoError(t, err)
+	require.True(t, resolved)
+	require.Equal(t, 2, count)
+	require.Equal(t, []string{"vip"}, createdGroups)
+	require.Equal(t, 1, loginCount)
+
+	token, resolved, err := ResolveNewAPIUpstreamAuthTokenForGroup(context.Background(), authServer.URL, rawKey, "", "vip")
+	require.NoError(t, err)
+	require.True(t, resolved)
+	require.Equal(t, "sk-vip", token)
+	require.Equal(t, 1, loginCount)
+}
+
 func TestResolveUpstreamAuthGroupForModelUsesProviderMetadataOnly(t *testing.T) {
 	settings := dto.ChannelOtherSettings{
 		UpstreamModelGroups: map[string][]string{

@@ -371,7 +371,10 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	if newAPIError != nil {
 		return newAPIError
 	}
+	originalKey := key
 	upstreamAuthGroup := service.ResolveUpstreamAuthGroupForModel(channel.GetOtherSettings(), modelName, getSelectedChannelUsingGroup(c))
+	common.SetContextKey(c, constant.ContextKeyChannelOriginalKey, originalKey)
+	common.SetContextKey(c, constant.ContextKeyChannelUpstreamAuthGroup, upstreamAuthGroup)
 	if resolvedKey, resolved, err := service.ResolveNewAPIUpstreamAuthTokenForGroup(c.Request.Context(), channel.GetBaseURL(), key, channel.GetSetting().Proxy, upstreamAuthGroup); resolved {
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())

@@ -170,6 +170,63 @@ func ResolveNewAPIUpstreamAuthTokenForGroup(ctx context.Context, baseURL string,
 	return resolveNewAPIUpstreamAuthToken(ctx, baseURL, rawKey, proxy, group)
 }
 
+func EnsureNewAPIUpstreamAuthTokensForGroups(ctx context.Context, baseURL string, rawKey string, proxy string, groups []string) (int, bool, error) {
+	cfg, ok, err := ParseNewAPIUpstreamAuthConfig(rawKey)
+	if err != nil || !ok {
+		return 0, ok, err
+	}
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	authBaseURL := cfg.AuthBaseURL
+	if authBaseURL == "" {
+		authBaseURL = baseURL
+	}
+	if authBaseURL == "" {
+		return 0, true, errors.New("newapi upstream auth requires auth_base_url or channel base_url")
+	}
+
+	client, err := newNewAPIUpstreamHTTPClient(proxy)
+	if err != nil {
+		return 0, true, err
+	}
+	userID, err := loginNewAPIUpstream(ctx, client, authBaseURL, cfg)
+	if err != nil {
+		return 0, true, err
+	}
+	if userID <= 0 {
+		return 0, true, errors.New("newapi upstream login returned invalid user id")
+	}
+
+	ensured := 0
+	for _, group := range normalizeNewAPIUpstreamAuthGroups(groups, cfg.Group) {
+		groupCfg := cfg
+		groupCfg.Group = group
+		tokenID, err := findNewAPIUpstreamToken(ctx, client, authBaseURL, userID, groupCfg.TokenName, groupCfg.Group)
+		if err != nil {
+			return ensured, true, fmt.Errorf("ensure newapi upstream token group %q failed: %w", groupCfg.Group, err)
+		}
+		if tokenID == 0 {
+			if err = createNewAPIUpstreamToken(ctx, client, authBaseURL, userID, groupCfg); err != nil {
+				return ensured, true, fmt.Errorf("ensure newapi upstream token group %q failed: %w", groupCfg.Group, err)
+			}
+			tokenID, err = findNewAPIUpstreamToken(ctx, client, authBaseURL, userID, groupCfg.TokenName, groupCfg.Group)
+			if err != nil {
+				return ensured, true, fmt.Errorf("ensure newapi upstream token group %q failed: %w", groupCfg.Group, err)
+			}
+			if tokenID == 0 {
+				return ensured, true, fmt.Errorf("newapi upstream token %q group %q was not found after creation", groupCfg.TokenName, groupCfg.Group)
+			}
+		}
+		token, err := getNewAPIUpstreamTokenKey(ctx, client, authBaseURL, userID, tokenID)
+		if err != nil {
+			return ensured, true, fmt.Errorf("ensure newapi upstream token group %q failed: %w", groupCfg.Group, err)
+		}
+		setNewAPIUpstreamTokenCache(authBaseURL, groupCfg, token)
+		LogNewAPIUpstreamAuthTokenDebug("ensure", baseURL, authBaseURL, groupCfg, token)
+		ensured++
+	}
+	return ensured, true, nil
+}
+
 func ResolveUpstreamAuthGroupForModel(settings dto.ChannelOtherSettings, modelName string, platformGroup string) string {
 	modelName = strings.TrimSpace(modelName)
 	platformGroup = strings.TrimSpace(platformGroup)
@@ -237,18 +294,49 @@ func resolveNewAPIUpstreamAuthToken(ctx context.Context, baseURL string, rawKey 
 
 	token, err := fetchNewAPIUpstreamToken(ctx, authBaseURL, cfg, proxy)
 	if err == nil && token != "" {
-		newAPIUpstreamTokenCacheMu.Lock()
-		newAPIUpstreamTokenCache[cacheKey] = newAPIUpstreamTokenCacheItem{
-			token:     token,
-			expiresAt: time.Now().Add(newAPIUpstreamTokenCacheTTL),
-		}
-		newAPIUpstreamTokenCacheMu.Unlock()
+		setNewAPIUpstreamTokenCache(authBaseURL, cfg, token)
 	}
 	if err != nil {
 		return "", true, err
 	}
 	LogNewAPIUpstreamAuthTokenDebug("fetch", baseURL, authBaseURL, cfg, token)
 	return token, true, nil
+}
+
+func setNewAPIUpstreamTokenCache(authBaseURL string, cfg NewAPIUpstreamAuthConfig, token string) {
+	if strings.TrimSpace(token) == "" {
+		return
+	}
+	newAPIUpstreamTokenCacheMu.Lock()
+	newAPIUpstreamTokenCache[newAPIUpstreamAuthCacheKey(authBaseURL, cfg)] = newAPIUpstreamTokenCacheItem{
+		token:     token,
+		expiresAt: time.Now().Add(newAPIUpstreamTokenCacheTTL),
+	}
+	newAPIUpstreamTokenCacheMu.Unlock()
+}
+
+func normalizeNewAPIUpstreamAuthGroups(groups []string, fallbackGroup string) []string {
+	fallbackGroup = strings.TrimSpace(fallbackGroup)
+	if fallbackGroup == "" || fallbackGroup == "auto" {
+		fallbackGroup = defaultNewAPIUpstreamTokenGroup
+	}
+	result := make([]string, 0, len(groups)+1)
+	seen := make(map[string]bool, len(groups)+1)
+	add := func(group string) {
+		group = strings.TrimSpace(group)
+		if group == "" || group == "auto" || seen[group] {
+			return
+		}
+		seen[group] = true
+		result = append(result, group)
+	}
+	for _, group := range groups {
+		add(group)
+	}
+	if len(result) == 0 {
+		add(fallbackGroup)
+	}
+	return result
 }
 
 func LogNewAPIUpstreamAuthTokenDebug(source string, apiBaseURL string, authBaseURL string, cfg NewAPIUpstreamAuthConfig, token string) {

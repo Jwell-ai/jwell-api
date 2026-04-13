@@ -130,6 +130,19 @@ func TestNormalizeGoogleAPICNBootstrapConfigDefaultsGroupMapping(t *testing.T) {
 	}, cfg.UpstreamGroupMapping)
 }
 
+func TestGoogleAPICNMappedUpstreamTokenGroups(t *testing.T) {
+	groups := googleAPICNMappedUpstreamTokenGroups(googleAPICNBootstrapConfig{
+		UpstreamTokenGroup: " default ",
+		UpstreamGroupMapping: map[string]string{
+			"default": "default",
+			"vip":     " pro ",
+			"staff":   "vip",
+		},
+	})
+
+	require.ElementsMatch(t, []string{"default", "pro", "vip"}, groups)
+}
+
 func TestGoogleAPICNModelEndpointTypes(t *testing.T) {
 	require.Equal(t,
 		[]constant.EndpointType{constant.EndpointTypeGemini, constant.EndpointTypeOpenAI},

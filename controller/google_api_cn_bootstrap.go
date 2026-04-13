@@ -236,6 +236,9 @@ func createGoogleAPICNChannel(ctx context.Context, cfg googleAPICNBootstrapConfi
 	upstreamModelGroups := googleAPICNModelInfoGroups(modelInfos, cfg.UpstreamTokenGroup)
 	setGoogleAPICNUpstreamModelGroups(&channel, upstreamModelGroups)
 	channel.Models = strings.Join(models, ",")
+	if err := ensureGoogleAPICNUpstreamAuthTokens(ctx, &channel, key, cfg); err != nil {
+		return err
+	}
 	if err := ensureGoogleAPICNModelRatios(models, cfg); err != nil {
 		return err
 	}
@@ -294,6 +297,11 @@ func syncGoogleAPICNChannel(ctx context.Context, channel *model.Channel, cfg goo
 	setGoogleAPICNUpstreamModelGroups(channel, mergedUpstreamModelGroups)
 	modelsChanged := strings.Join(normalizeModelNames(channel.GetModels()), ",") != strings.Join(mergedModels, ",")
 	channel.Models = strings.Join(mergedModels, ",")
+	if shouldOwnChannelKey {
+		if err := ensureGoogleAPICNUpstreamAuthTokens(ctx, channel, key, cfg); err != nil {
+			return err
+		}
+	}
 	if err := ensureGoogleAPICNModelRatios(models, cfg); err != nil {
 		return err
 	}
@@ -355,6 +363,30 @@ func setGoogleAPICNUpstreamModelGroups(channel *model.Channel, modelGroups map[s
 	settings := channel.GetOtherSettings()
 	settings.UpstreamModelGroups = modelGroups
 	channel.SetOtherSettings(settings)
+}
+
+func ensureGoogleAPICNUpstreamAuthTokens(ctx context.Context, channel *model.Channel, key string, cfg googleAPICNBootstrapConfig) error {
+	groups := googleAPICNMappedUpstreamTokenGroups(cfg)
+	if len(groups) == 0 {
+		return nil
+	}
+	count, resolved, err := service.EnsureNewAPIUpstreamAuthTokensForGroups(ctx, cfg.BaseURL, key, channel.GetSetting().Proxy, groups)
+	if err != nil {
+		return err
+	}
+	if resolved {
+		common.SysLog(fmt.Sprintf("google-api.cn upstream auth tokens ensured: groups=%d", count))
+	}
+	return nil
+}
+
+func googleAPICNMappedUpstreamTokenGroups(cfg googleAPICNBootstrapConfig) []string {
+	groups := make([]string, 0, len(cfg.UpstreamGroupMapping)+1)
+	groups = append(groups, cfg.UpstreamTokenGroup)
+	for _, upstreamGroup := range cfg.UpstreamGroupMapping {
+		groups = append(groups, upstreamGroup)
+	}
+	return normalizeModelNames(groups)
 }
 
 func parseGoogleAPICNGroupMapping(raw string) map[string]string {

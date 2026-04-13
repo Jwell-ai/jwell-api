@@ -228,6 +228,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		relayInfo.LastError = newAPIError
 
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
+		invalidateNewAPIUpstreamAuthTokenOnUnauthorized(c, newAPIError)
 
 		if !shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry()) {
 			break
@@ -345,6 +346,21 @@ func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) b
 		return false
 	}
 	return operation_setting.ShouldRetryByStatusCode(code)
+}
+
+func invalidateNewAPIUpstreamAuthTokenOnUnauthorized(c *gin.Context, err *types.NewAPIError) {
+	if err == nil || err.StatusCode != http.StatusUnauthorized {
+		return
+	}
+	originalKey := common.GetContextKeyString(c, constant.ContextKeyChannelOriginalKey)
+	if strings.TrimSpace(originalKey) == "" {
+		return
+	}
+	baseURL := common.GetContextKeyString(c, constant.ContextKeyChannelBaseUrl)
+	upstreamAuthGroup := common.GetContextKeyString(c, constant.ContextKeyChannelUpstreamAuthGroup)
+	if service.InvalidateNewAPIUpstreamAuthTokenForGroup(baseURL, originalKey, upstreamAuthGroup) {
+		logger.LogInfo(c, "invalidated newapi upstream auth token cache after 401")
+	}
 }
 
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
@@ -546,10 +562,12 @@ func RelayTask(c *gin.Context) {
 		}
 
 		if !taskErr.LocalError {
+			channelAPIError := types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode)
 			processChannelError(c,
 				*types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey,
 					common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()),
-				types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode))
+				channelAPIError)
+			invalidateNewAPIUpstreamAuthTokenOnUnauthorized(c, channelAPIError)
 		}
 
 		if !shouldRetryTaskRelay(c, channel.Id, taskErr, common.RetryTimes-retryParam.GetRetry()) {
