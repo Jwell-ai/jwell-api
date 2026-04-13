@@ -38,6 +38,7 @@ services:
 #      - GOOGLE_API_CN_GROUP=default  # 上游令牌分组
 #      - GOOGLE_API_CN_AUTO_BOOTSTRAP_ENABLED=true  # 自动创建/同步 google-api.cn 渠道
 #      - GOOGLE_API_CN_AUTH_BASE_URL=https://google-api.cn  # 登录/管理后台域名，也用于账户信息查询
+#      - GOOGLE_API_CN_PRICING_URL=https://google-api.cn/pricing  # 上游模型/价格列表，用于同步本平台可用模型
 #      - GOOGLE_API_CN_API_BASE_URL=https://future-api.vodeshop.com  # 实际模型 API 域名
 #      - GOOGLE_API_CN_CHANNEL_GROUP=default  # 本平台渠道分组
 #      - GOOGLE_API_CN_BOOTSTRAP_MODELS=  # 上游模型拉取失败时的兜底模型列表，逗号分隔

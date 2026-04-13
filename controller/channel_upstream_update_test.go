@@ -47,6 +47,23 @@ func TestMergeGoogleAPICNModelRatiosAddsOnlyMissingModels(t *testing.T) {
 	require.Equal(t, 37.5, result["new-upstream-model"])
 }
 
+func TestParseGoogleAPICNPricingModels(t *testing.T) {
+	body := []byte(`{
+		"success": true,
+		"data": [
+			{"model_name": " gpt-4o "},
+			{"model": "claude-3-5-sonnet"},
+			{"id": "gemini-2.5-pro"},
+			{"vendor": "ignored"}
+		]
+	}`)
+
+	models, err := parseGoogleAPICNPricingModels(body)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"gpt-4o", "claude-3-5-sonnet", "gemini-2.5-pro"}, models)
+}
+
 func TestSubtractModelNames(t *testing.T) {
 	result := subtractModelNames(
 		[]string{"gpt-4o", "gpt-4.1", "gpt-4.1-mini"},

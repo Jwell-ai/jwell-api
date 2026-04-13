@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -28,6 +29,7 @@ const (
 type googleAPICNBootstrapConfig struct {
 	BaseURL                string
 	AuthBaseURL            string
+	PricingURL             string
 	Name                   string
 	Tag                    string
 	Group                  string
@@ -80,10 +82,18 @@ func loadGoogleAPICNBootstrapConfig() (googleAPICNBootstrapConfig, bool) {
 	if authBaseURL == "" {
 		authBaseURL = googleAPICNDefaultAuthBaseURL
 	}
+	pricingURL := strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_PRICING_URL", ""))
+	if pricingURL == "" {
+		pricingURL = authBaseURL + "/pricing"
+	}
+	if strings.HasPrefix(pricingURL, "/") {
+		pricingURL = authBaseURL + pricingURL
+	}
 
 	return googleAPICNBootstrapConfig{
 		BaseURL:         baseURL,
 		AuthBaseURL:     authBaseURL,
+		PricingURL:      strings.TrimRight(pricingURL, "/"),
 		Name:            strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_CHANNEL_NAME", googleAPICNDefaultName)),
 		Tag:             strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_CHANNEL_TAG", googleAPICNDefaultTag)),
 		Group:           strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_CHANNEL_GROUP", googleAPICNDefaultGroup)),
@@ -343,6 +353,15 @@ func mergeGoogleAPICNModelRatios(existingRatios map[string]float64, existingPric
 }
 
 func fetchGoogleAPICNModels(ctx context.Context, channel *model.Channel) ([]string, error) {
+	cfg, ok := loadGoogleAPICNBootstrapConfig()
+	if ok && googleAPICNConfigMatchesChannel(channel, cfg) {
+		models, err := fetchGoogleAPICNPricingModels(ctx, cfg, channel.GetSetting().Proxy)
+		if err == nil {
+			return models, nil
+		}
+		common.SysError("google-api.cn pricing model fetch failed, falling back to API models: " + err.Error())
+	}
+
 	result := make(chan struct {
 		models []string
 		err    error
@@ -361,4 +380,70 @@ func fetchGoogleAPICNModels(ctx context.Context, channel *model.Channel) ([]stri
 	case res := <-result:
 		return normalizeModelNames(res.models), res.err
 	}
+}
+
+func fetchGoogleAPICNPricingModels(ctx context.Context, cfg googleAPICNBootstrapConfig, proxy string) ([]string, error) {
+	if strings.TrimSpace(cfg.PricingURL) == "" {
+		return nil, errors.New("google-api.cn pricing url is empty")
+	}
+	body, err := getResponseBodyWithContext(ctx, http.MethodGet, cfg.PricingURL, proxy, http.Header{
+		"Accept": []string{"application/json"},
+	})
+	if err != nil {
+		return nil, err
+	}
+	models, err := parseGoogleAPICNPricingModels(body)
+	if err != nil {
+		return nil, err
+	}
+	if len(models) == 0 {
+		return nil, fmt.Errorf("google-api.cn pricing returned no models: %s", cfg.PricingURL)
+	}
+	return models, nil
+}
+
+func parseGoogleAPICNPricingModels(body []byte) ([]string, error) {
+	var payload any
+	if err := common.Unmarshal(body, &payload); err != nil {
+		limited := strings.TrimSpace(string(body))
+		if len(limited) > 200 {
+			limited = limited[:200]
+		}
+		return nil, fmt.Errorf("decode google-api.cn pricing response failed: %w; body: %s", err, limited)
+	}
+	models := collectGoogleAPICNPricingModelNames(payload)
+	return normalizeModelNames(models), nil
+}
+
+func collectGoogleAPICNPricingModelNames(value any) []string {
+	switch typed := value.(type) {
+	case []any:
+		models := make([]string, 0, len(typed))
+		for _, item := range typed {
+			models = append(models, collectGoogleAPICNPricingModelNames(item)...)
+		}
+		return models
+	case map[string]any:
+		if modelName, ok := googleAPICNPricingModelNameFromMap(typed); ok {
+			return []string{modelName}
+		}
+		models := make([]string, 0)
+		for _, key := range []string{"data", "items", "models", "list"} {
+			if nested, ok := typed[key]; ok {
+				models = append(models, collectGoogleAPICNPricingModelNames(nested)...)
+			}
+		}
+		return models
+	default:
+		return nil
+	}
+}
+
+func googleAPICNPricingModelNameFromMap(item map[string]any) (string, bool) {
+	for _, key := range []string{"model_name", "model", "id"} {
+		if value, ok := item[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value), true
+		}
+	}
+	return "", false
 }

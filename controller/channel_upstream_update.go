@@ -241,6 +241,14 @@ func getUpstreamModelUpdateMinCheckIntervalSeconds() int64 {
 }
 
 func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
+	if cfg, ok := loadGoogleAPICNBootstrapConfig(); ok && googleAPICNConfigMatchesChannel(channel, cfg) {
+		models, err := fetchGoogleAPICNPricingModels(context.Background(), cfg, channel.GetSetting().Proxy)
+		if err == nil {
+			return models, nil
+		}
+		common.SysError("google-api.cn pricing model fetch failed, falling back to API models: " + err.Error())
+	}
+
 	baseURL := constant.ChannelBaseURLs[channel.Type]
 	if channel.GetBaseURL() != "" {
 		baseURL = channel.GetBaseURL()
