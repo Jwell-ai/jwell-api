@@ -8,14 +8,21 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Jwell-ai/jwell-api/common"
 	"github.com/Jwell-ai/jwell-api/constant"
 	"github.com/Jwell-ai/jwell-api/model"
 	"github.com/Jwell-ai/jwell-api/service"
+	"github.com/Jwell-ai/jwell-api/setting/operation_setting"
 	"github.com/Jwell-ai/jwell-api/setting/ratio_setting"
 	"gorm.io/gorm"
+)
+
+var (
+	googleAPICNBootstrapScheduleMu    sync.Mutex
+	googleAPICNBootstrapScheduleTimer *time.Timer
 )
 
 const (
@@ -52,7 +59,8 @@ func StartGoogleAPICNBootstrapTask() {
 	if !common.IsMasterNode {
 		return
 	}
-	if !common.GetEnvOrDefaultBool("GOOGLE_API_CN_AUTO_BOOTSTRAP_ENABLED", true) {
+	upstreamSetting := operation_setting.GetGoogleAPICNSetting()
+	if !upstreamSetting.AutoBootstrapEnabled {
 		common.SysLog("google-api.cn bootstrap disabled by GOOGLE_API_CN_AUTO_BOOTSTRAP_ENABLED")
 		return
 	}
@@ -63,7 +71,11 @@ func StartGoogleAPICNBootstrapTask() {
 	}
 
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(common.GetEnvOrDefault("GOOGLE_API_CN_BOOTSTRAP_TIMEOUT_SECONDS", 60))*time.Second)
+		timeoutSeconds := upstreamSetting.BootstrapTimeoutSeconds
+		if timeoutSeconds <= 0 {
+			timeoutSeconds = 60
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
 		defer cancel()
 
 		if err := ensureGoogleAPICNChannel(ctx, cfg); err != nil {
@@ -72,25 +84,33 @@ func StartGoogleAPICNBootstrapTask() {
 	}()
 }
 
+func ScheduleGoogleAPICNBootstrapTask() {
+	googleAPICNBootstrapScheduleMu.Lock()
+	defer googleAPICNBootstrapScheduleMu.Unlock()
+
+	if googleAPICNBootstrapScheduleTimer != nil {
+		googleAPICNBootstrapScheduleTimer.Stop()
+	}
+	googleAPICNBootstrapScheduleTimer = time.AfterFunc(2*time.Second, StartGoogleAPICNBootstrapTask)
+}
+
 func loadGoogleAPICNBootstrapConfig() (googleAPICNBootstrapConfig, bool) {
-	username := strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_USERNAME", ""))
-	password := strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_PASSWORD", ""))
+	upstreamSetting := operation_setting.GetGoogleAPICNSetting()
+	username := strings.TrimSpace(upstreamSetting.Username)
+	password := strings.TrimSpace(upstreamSetting.Password)
 	if username == "" || password == "" {
 		return googleAPICNBootstrapConfig{}, false
 	}
 
-	baseURL := strings.TrimRight(strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_API_BASE_URL", "")), "/")
-	if baseURL == "" {
-		baseURL = strings.TrimRight(strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_BASE_URL", "")), "/")
-	}
+	baseURL := strings.TrimRight(strings.TrimSpace(upstreamSetting.APIBaseURL), "/")
 	if baseURL == "" {
 		baseURL = googleAPICNDefaultAPIBaseURL
 	}
-	authBaseURL := strings.TrimRight(strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_AUTH_BASE_URL", googleAPICNDefaultAuthBaseURL)), "/")
+	authBaseURL := strings.TrimRight(strings.TrimSpace(upstreamSetting.AuthBaseURL), "/")
 	if authBaseURL == "" {
 		authBaseURL = googleAPICNDefaultAuthBaseURL
 	}
-	pricingURL := strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_PRICING_URL", ""))
+	pricingURL := strings.TrimSpace(upstreamSetting.PricingURL)
 	if pricingURL == "" {
 		pricingURL = authBaseURL + "/api/pricing"
 	}
@@ -98,41 +118,22 @@ func loadGoogleAPICNBootstrapConfig() (googleAPICNBootstrapConfig, bool) {
 		pricingURL = authBaseURL + pricingURL
 	}
 
-	return googleAPICNBootstrapConfig{
-		BaseURL:     baseURL,
-		AuthBaseURL: authBaseURL,
-		PricingURL:  strings.TrimRight(pricingURL, "/"),
-		Name:        strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_CHANNEL_NAME", googleAPICNDefaultName)),
-		Tag:         strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_CHANNEL_TAG", googleAPICNDefaultTag)),
-		Group:       strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_CHANNEL_GROUP", googleAPICNDefaultGroup)),
-		UpstreamTokenGroup: strings.TrimSpace(common.GetEnvOrDefaultString(
-			"GOOGLE_API_CN_GROUP",
-			googleAPICNDefaultGroup,
-		)),
-		UpstreamGroupMapping: parseGoogleAPICNGroupMapping(common.GetEnvOrDefaultString("GOOGLE_API_CN_GROUP_MAPPING", "")),
-		BootstrapModels:      normalizeModelNames(strings.Split(common.GetEnvOrDefaultString("GOOGLE_API_CN_BOOTSTRAP_MODELS", ""), ",")),
-		AutoRegisterModelRatio: common.GetEnvOrDefaultBool(
-			"GOOGLE_API_CN_AUTO_REGISTER_MODEL_RATIO_ENABLED",
-			true,
-		),
-		DefaultModelRatio: getGoogleAPICNDefaultModelRatio(),
-	}, true
+	return normalizeGoogleAPICNBootstrapConfig(googleAPICNBootstrapConfig{
+		BaseURL:                baseURL,
+		AuthBaseURL:            authBaseURL,
+		PricingURL:             strings.TrimRight(pricingURL, "/"),
+		Name:                   strings.TrimSpace(upstreamSetting.ChannelName),
+		Tag:                    strings.TrimSpace(upstreamSetting.ChannelTag),
+		Group:                  strings.TrimSpace(upstreamSetting.ChannelGroup),
+		UpstreamTokenGroup:     strings.TrimSpace(upstreamSetting.Group),
+		UpstreamGroupMapping:   parseGoogleAPICNGroupMapping(upstreamSetting.GroupMapping),
+		BootstrapModels:        normalizeModelNames(strings.Split(upstreamSetting.BootstrapModels, ",")),
+		AutoRegisterModelRatio: upstreamSetting.AutoRegisterModelRatio,
+		DefaultModelRatio:      normalizeGoogleAPICNDefaultModelRatio(upstreamSetting.DefaultModelRatio),
+	}), true
 }
 
-func getGoogleAPICNDefaultModelRatio() float64 {
-	raw := strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_DEFAULT_MODEL_RATIO", ""))
-	if raw == "" {
-		return googleAPICNDefaultModelRatio
-	}
-	ratio, err := strconv.ParseFloat(raw, 64)
-	if err != nil || ratio < 0 {
-		common.SysError(fmt.Sprintf("failed to parse GOOGLE_API_CN_DEFAULT_MODEL_RATIO: %s, using default value: %.2f", raw, googleAPICNDefaultModelRatio))
-		return googleAPICNDefaultModelRatio
-	}
-	return ratio
-}
-
-func ensureGoogleAPICNChannel(ctx context.Context, cfg googleAPICNBootstrapConfig) error {
+func normalizeGoogleAPICNBootstrapConfig(cfg googleAPICNBootstrapConfig) googleAPICNBootstrapConfig {
 	if cfg.Name == "" {
 		cfg.Name = googleAPICNDefaultName
 	}
@@ -145,14 +146,33 @@ func ensureGoogleAPICNChannel(ctx context.Context, cfg googleAPICNBootstrapConfi
 	if cfg.UpstreamTokenGroup == "" {
 		cfg.UpstreamTokenGroup = googleAPICNDefaultGroup
 	}
+	if cfg.AuthBaseURL == "" {
+		cfg.AuthBaseURL = googleAPICNDefaultAuthBaseURL
+	}
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = googleAPICNDefaultAPIBaseURL
+	}
+	if cfg.PricingURL == "" {
+		cfg.PricingURL = cfg.AuthBaseURL + "/api/pricing"
+	}
 	if len(cfg.UpstreamGroupMapping) == 0 {
 		cfg.UpstreamGroupMapping = map[string]string{
 			cfg.Group: cfg.UpstreamTokenGroup,
 		}
 	}
-	if cfg.AuthBaseURL == "" {
-		cfg.AuthBaseURL = googleAPICNDefaultAuthBaseURL
+	return cfg
+}
+
+func normalizeGoogleAPICNDefaultModelRatio(ratio float64) float64 {
+	if ratio < 0 {
+		common.SysError(fmt.Sprintf("invalid google-api.cn default model ratio: %.4f, using default value: %.2f", ratio, googleAPICNDefaultModelRatio))
+		return googleAPICNDefaultModelRatio
 	}
+	return ratio
+}
+
+func ensureGoogleAPICNChannel(ctx context.Context, cfg googleAPICNBootstrapConfig) error {
+	cfg = normalizeGoogleAPICNBootstrapConfig(cfg)
 
 	key, err := googleAPICNChannelKey(cfg.AuthBaseURL)
 	if err != nil {

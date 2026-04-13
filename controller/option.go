@@ -66,11 +66,13 @@ func GetOptions(c *gin.Context) {
 	common.OptionMapRWMutex.Lock()
 	for k, v := range common.OptionMap {
 		value := common.Interface2String(v)
+		lowerKey := strings.ToLower(k)
 		if strings.HasSuffix(k, "Token") ||
 			strings.HasSuffix(k, "Secret") ||
 			strings.HasSuffix(k, "Key") ||
-			strings.HasSuffix(k, "secret") ||
-			strings.HasSuffix(k, "api_key") {
+			strings.HasSuffix(lowerKey, "secret") ||
+			strings.HasSuffix(lowerKey, "api_key") ||
+			strings.HasSuffix(lowerKey, "password") {
 			continue
 		}
 		options = append(options, &model.Option{
@@ -296,11 +298,26 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
+	case "google_api_cn.group_mapping":
+		raw := strings.TrimSpace(option.Value.(string))
+		if raw != "" {
+			var mapping map[string]string
+			if err = common.UnmarshalJsonStr(raw, &mapping); err != nil {
+				c.JSON(http.StatusOK, gin.H{
+					"success": false,
+					"message": "google-api.cn 分组映射必须是合法 JSON 对象",
+				})
+				return
+			}
+		}
 	}
 	err = model.UpdateOption(option.Key, option.Value.(string))
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	if strings.HasPrefix(option.Key, "google_api_cn.") {
+		ScheduleGoogleAPICNBootstrapTask()
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

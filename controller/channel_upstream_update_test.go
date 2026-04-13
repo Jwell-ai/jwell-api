@@ -103,6 +103,33 @@ func TestParseGoogleAPICNGroupMapping(t *testing.T) {
 	}, result)
 }
 
+func TestNormalizeGoogleAPICNBootstrapConfigDefaultsGroupMapping(t *testing.T) {
+	cfg := normalizeGoogleAPICNBootstrapConfig(googleAPICNBootstrapConfig{
+		Group:              "platform-default",
+		UpstreamTokenGroup: "upstream-default",
+	})
+
+	require.Equal(t, map[string]string{
+		"platform-default": "upstream-default",
+	}, cfg.UpstreamGroupMapping)
+	require.Equal(t, googleAPICNDefaultAPIBaseURL, cfg.BaseURL)
+	require.Equal(t, googleAPICNDefaultAuthBaseURL, cfg.AuthBaseURL)
+	require.Equal(t, googleAPICNDefaultName, cfg.Name)
+	require.Equal(t, googleAPICNDefaultTag, cfg.Tag)
+
+	cfg = normalizeGoogleAPICNBootstrapConfig(googleAPICNBootstrapConfig{
+		Group:              "platform-default",
+		UpstreamTokenGroup: "upstream-default",
+		UpstreamGroupMapping: map[string]string{
+			"vip": "upstream-vip",
+		},
+	})
+
+	require.Equal(t, map[string]string{
+		"vip": "upstream-vip",
+	}, cfg.UpstreamGroupMapping)
+}
+
 func TestGoogleAPICNModelEndpointTypes(t *testing.T) {
 	require.Equal(t,
 		[]constant.EndpointType{constant.EndpointTypeGemini, constant.EndpointTypeOpenAI},

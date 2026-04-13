@@ -17,6 +17,7 @@ import (
 
 	"github.com/Jwell-ai/jwell-api/common"
 	"github.com/Jwell-ai/jwell-api/dto"
+	"github.com/Jwell-ai/jwell-api/setting/operation_setting"
 )
 
 const (
@@ -94,7 +95,14 @@ func applyNewAPIUpstreamAuthEnv(cfg *NewAPIUpstreamAuthConfig) {
 	cfg.Group = strings.TrimSpace(cfg.Group)
 	cfg.GroupEnv = strings.TrimSpace(cfg.GroupEnv)
 
-	switch strings.ToLower(strings.ReplaceAll(cfg.Profile, "-", "_")) {
+	profile := strings.ToLower(strings.ReplaceAll(cfg.Profile, "-", "_"))
+	explicitAuthBaseEnv := cfg.AuthBaseEnv != ""
+	explicitUsernameEnv := cfg.UsernameEnv != ""
+	explicitPasswordEnv := cfg.PasswordEnv != ""
+	explicitTokenNameEnv := cfg.TokenNameEnv != ""
+	explicitGroupEnv := cfg.GroupEnv != ""
+
+	switch profile {
 	case "google_api_cn":
 		if cfg.AuthBaseEnv == "" {
 			cfg.AuthBaseEnv = "GOOGLE_API_CN_AUTH_BASE_URL"
@@ -113,11 +121,27 @@ func applyNewAPIUpstreamAuthEnv(cfg *NewAPIUpstreamAuthConfig) {
 		}
 	}
 
+	if profile == "google_api_cn" {
+		upstreamSetting := operation_setting.GetGoogleAPICNSetting()
+		if cfg.AuthBaseURL == "" && !explicitAuthBaseEnv {
+			cfg.AuthBaseURL = strings.TrimRight(strings.TrimSpace(upstreamSetting.AuthBaseURL), "/")
+		}
+		if cfg.Username == "" && !explicitUsernameEnv {
+			cfg.Username = strings.TrimSpace(upstreamSetting.Username)
+		}
+		if cfg.Password == "" && !explicitPasswordEnv {
+			cfg.Password = strings.TrimSpace(upstreamSetting.Password)
+		}
+		if cfg.TokenName == "" && !explicitTokenNameEnv {
+			cfg.TokenName = strings.TrimSpace(upstreamSetting.TokenName)
+		}
+		if cfg.Group == "" && !explicitGroupEnv {
+			cfg.Group = strings.TrimSpace(upstreamSetting.Group)
+		}
+	}
+
 	if cfg.AuthBaseURL == "" && cfg.AuthBaseEnv != "" {
 		cfg.AuthBaseURL = strings.TrimRight(strings.TrimSpace(common.GetEnvOrDefaultString(cfg.AuthBaseEnv, "")), "/")
-	}
-	if cfg.AuthBaseURL == "" && strings.EqualFold(strings.ReplaceAll(cfg.Profile, "-", "_"), "google_api_cn") {
-		cfg.AuthBaseURL = "https://google-api.cn"
 	}
 	if cfg.Username == "" && cfg.UsernameEnv != "" {
 		cfg.Username = strings.TrimSpace(common.GetEnvOrDefaultString(cfg.UsernameEnv, ""))
@@ -130,6 +154,11 @@ func applyNewAPIUpstreamAuthEnv(cfg *NewAPIUpstreamAuthConfig) {
 	}
 	if cfg.Group == "" && cfg.GroupEnv != "" {
 		cfg.Group = strings.TrimSpace(common.GetEnvOrDefaultString(cfg.GroupEnv, ""))
+	}
+	if profile == "google_api_cn" {
+		if cfg.AuthBaseURL == "" {
+			cfg.AuthBaseURL = "https://google-api.cn"
+		}
 	}
 }
 
@@ -248,6 +277,9 @@ func NewAPIUpstreamAuthTokenDebugSummary(token string) string {
 }
 
 func newAPIUpstreamAuthDebugEnabled() bool {
+	if operation_setting.GetGoogleAPICNSetting().DebugAuthTokenFingerprint {
+		return true
+	}
 	return common.GetEnvOrDefaultBool(newAPIUpstreamAuthDebugEnv, false) ||
 		common.GetEnvOrDefaultBool(googleAPICNAuthDebugEnv, false)
 }
@@ -463,6 +495,7 @@ func loginNewAPIUpstream(ctx context.Context, client *http.Client, baseURL strin
 }
 
 func findNewAPIUpstreamToken(ctx context.Context, client *http.Client, baseURL string, userID int, tokenName string, group string) (int, error) {
+	group = strings.TrimSpace(group)
 	var result newAPIResponse[newAPITokenPage]
 	if err := doNewAPIJSON(ctx, client, http.MethodGet, baseURL+"/api/token/?p=1&size=100", userID, nil, &result); err != nil {
 		return 0, err
@@ -477,7 +510,7 @@ func findNewAPIUpstreamToken(ctx context.Context, client *http.Client, baseURL s
 		}
 		itemGroup := strings.TrimSpace(item.Group)
 		if itemGroup == "" {
-			if nameOnlyMatch == 0 {
+			if nameOnlyMatch == 0 && (group == "" || group == defaultNewAPIUpstreamTokenGroup) {
 				nameOnlyMatch = item.ID
 			}
 			continue

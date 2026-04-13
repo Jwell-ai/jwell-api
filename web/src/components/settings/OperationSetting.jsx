@@ -27,6 +27,7 @@ import SettingsLog from '../../pages/Setting/Operation/SettingsLog';
 import SettingsMonitoring from '../../pages/Setting/Operation/SettingsMonitoring';
 import SettingsCreditLimit from '../../pages/Setting/Operation/SettingsCreditLimit';
 import SettingsCheckin from '../../pages/Setting/Operation/SettingsCheckin';
+import SettingsGoogleAPICNUpstream from '../../pages/Setting/Operation/SettingsGoogleAPICNUpstream';
 import { API, showError, toBoolean } from '../../helpers';
 
 const OperationSetting = () => {
@@ -81,6 +82,25 @@ const OperationSetting = () => {
 
     /* 令牌设置 */
     'token_setting.max_user_tokens': 1000,
+
+    /* google-api.cn 上游配置 */
+    'google_api_cn.username': '',
+    'google_api_cn.password': '',
+    'google_api_cn.token_name': 'jwell-api-upstream',
+    'google_api_cn.group': 'default',
+    'google_api_cn.group_mapping': '',
+    'google_api_cn.auto_bootstrap_enabled': true,
+    'google_api_cn.auth_base_url': 'https://google-api.cn',
+    'google_api_cn.pricing_url': 'https://google-api.cn/api/pricing',
+    'google_api_cn.api_base_url': 'https://gemini-api.cn',
+    'google_api_cn.channel_name': 'google-api.cn',
+    'google_api_cn.channel_tag': 'google-api-cn',
+    'google_api_cn.channel_group': 'default',
+    'google_api_cn.bootstrap_models': '',
+    'google_api_cn.auto_register_model_ratio_enabled': true,
+    'google_api_cn.default_model_ratio': 37.5,
+    'google_api_cn.bootstrap_timeout_seconds': 60,
+    'google_api_cn.debug_auth_token': false,
   });
 
   let [loading, setLoading] = useState(false);
@@ -145,6 +165,10 @@ const OperationSetting = () => {
         {/* 监控设置 */}
         <Card style={{ marginTop: '10px' }}>
           <SettingsMonitoring options={inputs} refresh={onRefresh} />
+        </Card>
+        {/* google-api.cn 上游配置 */}
+        <Card style={{ marginTop: '10px' }}>
+          <SettingsGoogleAPICNUpstream options={inputs} refresh={onRefresh} />
         </Card>
         {/* 额度设置 */}
         <Card style={{ marginTop: '10px' }}>

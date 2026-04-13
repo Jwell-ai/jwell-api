@@ -17,22 +17,22 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Tabs, TabPane, Typography, Card, Button, Tooltip } from '@douyinfe/semi-ui';
 import { IconCopy } from '@douyinfe/semi-icons';
 import { useIsMobile } from '../../hooks/common/useIsMobile';
-import { showSuccess } from '../../helpers';
+import { getSystemName, showSuccess } from '../../helpers';
 
 const { Title, Text, Paragraph } = Typography;
 
-// API 端点配置
-const API_ENDPOINTS = {
+// API 端点配置（使用翻译 key）
+const getApiEndpoints = (t) => ({
   chat: {
-    title: '对话补全',
+    title: t('对话补全'),
     method: 'POST',
     path: '/v1/chat/completions',
-    description: '创建对话补全请求，支持流式和非流式响应',
+    description: t('创建对话补全请求，支持流式和非流式响应'),
     requestBody: {
       model: 'gpt-4o',
       messages: [
@@ -66,10 +66,10 @@ const API_ENDPOINTS = {
     }
   },
   completions: {
-    title: '文本补全',
+    title: t('文本补全'),
     method: 'POST',
     path: '/v1/completions',
-    description: '创建文本补全请求',
+    description: t('创建文本补全请求'),
     requestBody: {
       model: 'gpt-3.5-turbo-instruct',
       prompt: 'Once upon a time',
@@ -96,10 +96,10 @@ const API_ENDPOINTS = {
     }
   },
   embeddings: {
-    title: '文本嵌入',
+    title: t('文本嵌入'),
     method: 'POST',
     path: '/v1/embeddings',
-    description: '创建文本嵌入向量',
+    description: t('创建文本嵌入向量'),
     requestBody: {
       model: 'text-embedding-3-small',
       input: 'The quick brown fox jumps over the lazy dog'
@@ -121,10 +121,10 @@ const API_ENDPOINTS = {
     }
   },
   models: {
-    title: '模型列表',
+    title: t('模型列表'),
     method: 'GET',
     path: '/v1/models',
-    description: '获取可用的模型列表',
+    description: t('获取可用的模型列表'),
     requestBody: null,
     response: {
       object: 'list',
@@ -145,10 +145,10 @@ const API_ENDPOINTS = {
     }
   },
   images: {
-    title: '图像生成',
+    title: t('图像生成'),
     method: 'POST',
     path: '/v1/images/generations',
-    description: '根据提示生成图像',
+    description: t('根据提示生成图像'),
     requestBody: {
       model: 'dall-e-3',
       prompt: 'A beautiful sunset over the ocean',
@@ -165,7 +165,7 @@ const API_ENDPOINTS = {
       ]
     }
   }
-};
+});
 
 // 代码示例模板
 const CODE_TEMPLATES = {
@@ -246,6 +246,10 @@ const ApiDocs = () => {
 
   // 获取服务器地址
   const baseUrl = window.location.origin;
+  const systemName = getSystemName();
+
+  // 获取 API 端点配置（带翻译）
+  const API_ENDPOINTS = useMemo(() => getApiEndpoints(t), [t]);
 
   const handleCopy = (text) => {
     navigator.clipboard.writeText(text);
@@ -342,7 +346,7 @@ const ApiDocs = () => {
         <div className="max-w-6xl mx-auto px-4 py-8">
           <Title heading={2} className="mb-4">{t('API 文档')}</Title>
           <Paragraph className="text-semi-color-text-1 text-lg">
-            {t('欢迎使用 Jwell API，本文档将帮助您快速接入和使用我们的服务。')}
+            {t('欢迎使用 {{systemName}} API，本文档将帮助您快速接入和使用我们的服务。', { systemName })}
           </Paragraph>
           
           {/* 基础信息 */}

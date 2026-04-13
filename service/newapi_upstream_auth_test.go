@@ -9,8 +9,19 @@ import (
 
 	"github.com/Jwell-ai/jwell-api/common"
 	"github.com/Jwell-ai/jwell-api/dto"
+	"github.com/Jwell-ai/jwell-api/setting/operation_setting"
 	"github.com/stretchr/testify/require"
 )
+
+func withGoogleAPICNSetting(t *testing.T, mutate func(*operation_setting.GoogleAPICNSetting)) {
+	t.Helper()
+	setting := operation_setting.GetGoogleAPICNSetting()
+	original := *setting
+	mutate(setting)
+	t.Cleanup(func() {
+		*setting = original
+	})
+}
 
 func TestResolveNewAPIUpstreamAuthTokenCreatesAndCachesToken(t *testing.T) {
 	t.Parallel()
@@ -197,6 +208,62 @@ func TestResolveNewAPIUpstreamAuthTokenForGroupUsesMatchingTokenGroup(t *testing
 	require.True(t, resolved)
 	require.Equal(t, "sk-vip", token)
 	require.Empty(t, createdPayloadGroup)
+}
+
+func TestResolveNewAPIUpstreamAuthTokenForGroupIgnoresNameOnlyTokenForDifferentGroup(t *testing.T) {
+	t.Parallel()
+
+	tokenListCalls := 0
+	createdPayloadGroup := ""
+	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/user/login":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"id": 42,
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/token/":
+			tokenListCalls++
+			items := []map[string]any{{"id": 7, "name": "jwell-upstream"}}
+			if tokenListCalls > 1 {
+				items = append(items, map[string]any{"id": 8, "name": "jwell-upstream", "group": "vip"})
+			}
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"items": items,
+				},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token/":
+			var payload map[string]any
+			require.NoError(t, common.DecodeJson(r.Body, &payload))
+			createdPayloadGroup = payload["group"].(string)
+			writeNewAPITestJSON(t, w, map[string]any{"success": true, "message": "", "data": map[string]any{}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token/8/key":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"key": "sk-vip",
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer authServer.Close()
+
+	rawKey := `{"type":"newapi_login","username":"alice","password":"secret","token_name":"jwell-upstream","group":"default"}`
+	token, resolved, err := ResolveNewAPIUpstreamAuthTokenForGroup(context.Background(), authServer.URL, rawKey, "", "vip")
+	require.NoError(t, err)
+	require.True(t, resolved)
+	require.Equal(t, "sk-vip", token)
+	require.Equal(t, "vip", createdPayloadGroup)
 }
 
 func TestResolveUpstreamAuthGroupForModelUsesProviderMetadataOnly(t *testing.T) {
@@ -424,6 +491,13 @@ func TestParseNewAPIUpstreamAuthConfigGoogleProfileUsesEnv(t *testing.T) {
 	t.Setenv("GOOGLE_API_CN_PASSWORD", "secret")
 	t.Setenv("GOOGLE_API_CN_TOKEN_NAME", "google-upstream")
 	t.Setenv("GOOGLE_API_CN_GROUP", "vip")
+	withGoogleAPICNSetting(t, func(setting *operation_setting.GoogleAPICNSetting) {
+		setting.AuthBaseURL = ""
+		setting.Username = ""
+		setting.Password = ""
+		setting.TokenName = ""
+		setting.Group = ""
+	})
 
 	cfg, ok, err := ParseNewAPIUpstreamAuthConfig(`{"type":"newapi_login","profile":"google_api_cn"}`)
 	require.NoError(t, err)
@@ -435,9 +509,40 @@ func TestParseNewAPIUpstreamAuthConfigGoogleProfileUsesEnv(t *testing.T) {
 	require.Equal(t, "vip", cfg.Group)
 }
 
+func TestParseNewAPIUpstreamAuthConfigGoogleProfilePrefersSettingOverEnv(t *testing.T) {
+	t.Setenv("GOOGLE_API_CN_AUTH_BASE_URL", "https://env.example")
+	t.Setenv("GOOGLE_API_CN_USERNAME", "env-user")
+	t.Setenv("GOOGLE_API_CN_PASSWORD", "env-password")
+	t.Setenv("GOOGLE_API_CN_TOKEN_NAME", "env-token")
+	t.Setenv("GOOGLE_API_CN_GROUP", "env-group")
+	withGoogleAPICNSetting(t, func(setting *operation_setting.GoogleAPICNSetting) {
+		setting.AuthBaseURL = "https://setting.example"
+		setting.Username = "setting-user"
+		setting.Password = "setting-password"
+		setting.TokenName = "setting-token"
+		setting.Group = "setting-group"
+	})
+
+	cfg, ok, err := ParseNewAPIUpstreamAuthConfig(`{"type":"newapi_login","profile":"google_api_cn"}`)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "setting-user", cfg.Username)
+	require.Equal(t, "setting-password", cfg.Password)
+	require.Equal(t, "https://setting.example", cfg.AuthBaseURL)
+	require.Equal(t, "setting-token", cfg.TokenName)
+	require.Equal(t, "setting-group", cfg.Group)
+}
+
 func TestParseNewAPIUpstreamAuthConfigGoogleProfileDefaultsAuthBaseURL(t *testing.T) {
 	t.Setenv("GOOGLE_API_CN_USERNAME", "alice")
 	t.Setenv("GOOGLE_API_CN_PASSWORD", "secret")
+	withGoogleAPICNSetting(t, func(setting *operation_setting.GoogleAPICNSetting) {
+		setting.AuthBaseURL = ""
+		setting.Username = ""
+		setting.Password = ""
+		setting.TokenName = ""
+		setting.Group = ""
+	})
 
 	cfg, ok, err := ParseNewAPIUpstreamAuthConfig(`{"type":"newapi_login","profile":"google_api_cn"}`)
 	require.NoError(t, err)
