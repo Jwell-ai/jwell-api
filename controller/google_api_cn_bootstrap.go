@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/Jwell-ai/jwell-api/constant"
 	"github.com/Jwell-ai/jwell-api/model"
 	"github.com/Jwell-ai/jwell-api/service"
+	"github.com/Jwell-ai/jwell-api/setting/ratio_setting"
 	"gorm.io/gorm"
 )
 
@@ -20,15 +22,18 @@ const (
 	googleAPICNDefaultName        = "google-api.cn"
 	googleAPICNDefaultTag         = "google-api-cn"
 	googleAPICNDefaultGroup       = "default"
+	googleAPICNDefaultModelRatio  = 37.5
 )
 
 type googleAPICNBootstrapConfig struct {
-	BaseURL         string
-	AuthBaseURL     string
-	Name            string
-	Tag             string
-	Group           string
-	BootstrapModels []string
+	BaseURL                string
+	AuthBaseURL            string
+	Name                   string
+	Tag                    string
+	Group                  string
+	BootstrapModels        []string
+	AutoRegisterModelRatio bool
+	DefaultModelRatio      float64
 }
 
 // StartGoogleAPICNBootstrapTask creates or updates the shared google-api.cn
@@ -83,7 +88,25 @@ func loadGoogleAPICNBootstrapConfig() (googleAPICNBootstrapConfig, bool) {
 		Tag:             strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_CHANNEL_TAG", googleAPICNDefaultTag)),
 		Group:           strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_CHANNEL_GROUP", googleAPICNDefaultGroup)),
 		BootstrapModels: normalizeModelNames(strings.Split(common.GetEnvOrDefaultString("GOOGLE_API_CN_BOOTSTRAP_MODELS", ""), ",")),
+		AutoRegisterModelRatio: common.GetEnvOrDefaultBool(
+			"GOOGLE_API_CN_AUTO_REGISTER_MODEL_RATIO_ENABLED",
+			true,
+		),
+		DefaultModelRatio: getGoogleAPICNDefaultModelRatio(),
 	}, true
+}
+
+func getGoogleAPICNDefaultModelRatio() float64 {
+	raw := strings.TrimSpace(common.GetEnvOrDefaultString("GOOGLE_API_CN_DEFAULT_MODEL_RATIO", ""))
+	if raw == "" {
+		return googleAPICNDefaultModelRatio
+	}
+	ratio, err := strconv.ParseFloat(raw, 64)
+	if err != nil || ratio < 0 {
+		common.SysError(fmt.Sprintf("failed to parse GOOGLE_API_CN_DEFAULT_MODEL_RATIO: %s, using default value: %.2f", raw, googleAPICNDefaultModelRatio))
+		return googleAPICNDefaultModelRatio
+	}
+	return ratio
 }
 
 func ensureGoogleAPICNChannel(ctx context.Context, cfg googleAPICNBootstrapConfig) error {
@@ -158,6 +181,9 @@ func createGoogleAPICNChannel(ctx context.Context, cfg googleAPICNBootstrapConfi
 		common.SysError("google-api.cn model fetch failed, using GOOGLE_API_CN_BOOTSTRAP_MODELS: " + err.Error())
 	}
 	channel.Models = strings.Join(models, ",")
+	if err := ensureGoogleAPICNModelRatios(models, cfg); err != nil {
+		return err
+	}
 
 	if err := channel.Insert(); err != nil {
 		return err
@@ -180,6 +206,7 @@ func syncGoogleAPICNChannel(ctx context.Context, channel *model.Channel, cfg goo
 	if shouldOwnChannelKey {
 		channel.Key = key
 	}
+	originTag := channel.GetTag()
 	if channel.GetTag() == "" {
 		channel.Tag = common.GetPointer(cfg.Tag)
 	}
@@ -189,8 +216,10 @@ func syncGoogleAPICNChannel(ctx context.Context, channel *model.Channel, cfg goo
 	if strings.TrimSpace(channel.Name) == "" {
 		channel.Name = cfg.Name
 	}
+	groupChanged := false
 	if strings.TrimSpace(channel.Group) == "" {
 		channel.Group = cfg.Group
+		groupChanged = true
 	}
 	setGoogleAPICNUpstreamModelSettings(channel)
 
@@ -206,6 +235,11 @@ func syncGoogleAPICNChannel(ctx context.Context, channel *model.Channel, cfg goo
 	mergedModels := mergeModelNames(channel.GetModels(), models)
 	modelsChanged := strings.Join(normalizeModelNames(channel.GetModels()), ",") != strings.Join(mergedModels, ",")
 	channel.Models = strings.Join(mergedModels, ",")
+	if err := ensureGoogleAPICNModelRatios(models, cfg); err != nil {
+		return err
+	}
+	tagChanged := originTag != channel.GetTag()
+	abilitiesChanged := modelsChanged || groupChanged || tagChanged
 
 	updates := map[string]interface{}{
 		"name":     channel.Name,
@@ -228,7 +262,7 @@ func syncGoogleAPICNChannel(ctx context.Context, channel *model.Channel, cfg goo
 	if err := model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Updates(updates).Error; err != nil {
 		return err
 	}
-	if modelsChanged {
+	if abilitiesChanged {
 		if err := channel.UpdateAbilities(nil); err != nil {
 			return err
 		}
@@ -243,6 +277,69 @@ func setGoogleAPICNUpstreamModelSettings(channel *model.Channel) {
 	settings.UpstreamModelUpdateCheckEnabled = true
 	settings.UpstreamModelUpdateAutoSyncEnabled = true
 	channel.SetOtherSettings(settings)
+}
+
+func ensureGoogleAPICNModelRatios(models []string, cfg googleAPICNBootstrapConfig) error {
+	if !cfg.AutoRegisterModelRatio {
+		return nil
+	}
+	modelRatios, added := mergeGoogleAPICNModelRatios(
+		ratio_setting.GetModelRatioCopy(),
+		ratio_setting.GetModelPriceCopy(),
+		models,
+		cfg.DefaultModelRatio,
+	)
+	if added == 0 {
+		return nil
+	}
+	data, err := common.Marshal(modelRatios)
+	if err != nil {
+		return err
+	}
+	if err = model.UpdateOption("ModelRatio", string(data)); err != nil {
+		return err
+	}
+	ratio_setting.InvalidateExposedDataCache()
+	common.SysLog(fmt.Sprintf("google-api.cn model ratios registered: added=%d ratio=%.4f", added, cfg.DefaultModelRatio))
+	return nil
+}
+
+func ensureGoogleAPICNModelRatiosForChannel(channel *model.Channel, models []string) error {
+	cfg, ok := loadGoogleAPICNBootstrapConfig()
+	if !ok || !googleAPICNConfigMatchesChannel(channel, cfg) {
+		return nil
+	}
+	return ensureGoogleAPICNModelRatios(models, cfg)
+}
+
+func googleAPICNConfigMatchesChannel(channel *model.Channel, cfg googleAPICNBootstrapConfig) bool {
+	if channel == nil {
+		return false
+	}
+	channelBaseURL := strings.TrimRight(strings.TrimSpace(channel.GetBaseURL()), "/")
+	return channel.GetTag() == cfg.Tag ||
+		channelBaseURL == cfg.BaseURL ||
+		channelBaseURL == cfg.AuthBaseURL
+}
+
+func mergeGoogleAPICNModelRatios(existingRatios map[string]float64, existingPrices map[string]float64, models []string, defaultRatio float64) (map[string]float64, int) {
+	merged := make(map[string]float64, len(existingRatios)+len(models))
+	for modelName, ratio := range existingRatios {
+		merged[modelName] = ratio
+	}
+	added := 0
+	for _, modelName := range normalizeModelNames(models) {
+		ratioKey := ratio_setting.FormatMatchingModelName(modelName)
+		if _, ok := existingPrices[ratioKey]; ok {
+			continue
+		}
+		if _, ok := merged[ratioKey]; ok {
+			continue
+		}
+		merged[ratioKey] = defaultRatio
+		added++
+	}
+	return merged, added
 }
 
 func fetchGoogleAPICNModels(ctx context.Context, channel *model.Channel) ([]string, error) {

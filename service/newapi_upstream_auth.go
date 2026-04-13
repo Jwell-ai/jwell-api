@@ -202,6 +202,55 @@ type newAPITokenKeyData struct {
 	Key string `json:"key"`
 }
 
+type NewAPIUpstreamAccount struct {
+	UserID    int
+	Quota     int
+	UsedQuota int
+}
+
+type newAPIUserSelfData struct {
+	ID        int `json:"id"`
+	Quota     int `json:"quota"`
+	UsedQuota int `json:"used_quota"`
+}
+
+func FetchNewAPIUpstreamAccount(ctx context.Context, rawKey string, proxy string) (NewAPIUpstreamAccount, bool, error) {
+	cfg, ok, err := ParseNewAPIUpstreamAuthConfig(rawKey)
+	if err != nil || !ok {
+		return NewAPIUpstreamAccount{}, ok, err
+	}
+	authBaseURL := cfg.AuthBaseURL
+	if authBaseURL == "" {
+		return NewAPIUpstreamAccount{}, true, errors.New("newapi upstream account requires auth_base_url")
+	}
+	client, err := newNewAPIUpstreamHTTPClient(proxy)
+	if err != nil {
+		return NewAPIUpstreamAccount{}, true, err
+	}
+	userID, err := loginNewAPIUpstream(ctx, client, authBaseURL, cfg)
+	if err != nil {
+		return NewAPIUpstreamAccount{}, true, err
+	}
+	if userID <= 0 {
+		return NewAPIUpstreamAccount{}, true, errors.New("newapi upstream login returned invalid user id")
+	}
+	var result newAPIResponse[newAPIUserSelfData]
+	if err = doNewAPIJSON(ctx, client, http.MethodGet, authBaseURL+"/api/user/self", userID, nil, &result); err != nil {
+		return NewAPIUpstreamAccount{}, true, err
+	}
+	if !result.Success {
+		return NewAPIUpstreamAccount{}, true, fmt.Errorf("newapi upstream user self failed: %s", result.Message)
+	}
+	if result.Data.ID == 0 {
+		result.Data.ID = userID
+	}
+	return NewAPIUpstreamAccount{
+		UserID:    result.Data.ID,
+		Quota:     result.Data.Quota,
+		UsedQuota: result.Data.UsedQuota,
+	}, true, nil
+}
+
 func fetchNewAPIUpstreamToken(ctx context.Context, baseURL string, cfg NewAPIUpstreamAuthConfig, proxy string) (string, error) {
 	client, err := newNewAPIUpstreamHTTPClient(proxy)
 	if err != nil {

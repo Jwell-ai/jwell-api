@@ -29,6 +29,24 @@ func TestMergeModelNames(t *testing.T) {
 	require.Equal(t, []string{"gpt-4o", "gpt-4.1", "gpt-4.1-mini"}, result)
 }
 
+func TestMergeGoogleAPICNModelRatiosAddsOnlyMissingModels(t *testing.T) {
+	result, added := mergeGoogleAPICNModelRatios(
+		map[string]float64{
+			"gpt-4o": 2,
+		},
+		map[string]float64{
+			"priced-model": 0.1,
+		},
+		[]string{"gpt-4o", "priced-model", "new-upstream-model", " new-upstream-model "},
+		37.5,
+	)
+
+	require.Equal(t, 1, added)
+	require.Equal(t, 2.0, result["gpt-4o"])
+	require.NotContains(t, result, "priced-model")
+	require.Equal(t, 37.5, result["new-upstream-model"])
+}
+
 func TestSubtractModelNames(t *testing.T) {
 	result := subtractModelNames(
 		[]string{"gpt-4o", "gpt-4.1", "gpt-4.1-mini"},

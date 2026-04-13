@@ -22,20 +22,26 @@ func TestFetchGoogleAPICNUpstreamAccountUsesAuthBaseURL(t *testing.T) {
 	defer apiServer.Close()
 
 	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "Bearer sk-upstream", r.Header.Get("Authorization"))
 		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/v1/dashboard/billing/subscription":
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/user/login":
 			writeControllerTestJSON(t, w, map[string]any{
-				"hard_limit_usd":     30.0,
-				"has_payment_method": true,
-				"access_until":       12345,
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"id": 42,
+				},
 			})
-		case "/v1/dashboard/billing/usage":
-			require.NotEmpty(t, r.URL.Query().Get("start_date"))
-			require.NotEmpty(t, r.URL.Query().Get("end_date"))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/user/self":
+			require.Equal(t, "42", r.Header.Get("New-Api-User"))
 			writeControllerTestJSON(t, w, map[string]any{
-				"total_usage": 250.0,
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"id":         42,
+					"quota":      5000000,
+					"used_quota": 1250000,
+				},
 			})
 		default:
 			http.NotFound(w, r)
@@ -46,16 +52,15 @@ func TestFetchGoogleAPICNUpstreamAccountUsesAuthBaseURL(t *testing.T) {
 	account, err := fetchGoogleAPICNUpstreamAccount(context.Background(), googleAPICNBootstrapConfig{
 		BaseURL:     apiServer.URL,
 		AuthBaseURL: authServer.URL,
-	}, "sk-upstream", "")
+	}, `{"type":"newapi_login","username":"alice","password":"secret","auth_base_url":"`+authServer.URL+`"}`, "")
 
 	require.NoError(t, err)
 	require.False(t, apiServerHit.Load())
 	require.Equal(t, apiServer.URL, account.APIBaseURL)
 	require.Equal(t, authServer.URL, account.AuthBaseURL)
-	require.Equal(t, 30.0, account.TotalUSD)
+	require.Equal(t, 12.5, account.TotalUSD)
 	require.Equal(t, 2.5, account.UsedUSD)
-	require.Equal(t, 27.5, account.BalanceUSD)
-	require.Equal(t, int64(12345), account.AccessUntil)
+	require.Equal(t, 10.0, account.BalanceUSD)
 }
 
 func writeControllerTestJSON(t *testing.T, w http.ResponseWriter, v any) {

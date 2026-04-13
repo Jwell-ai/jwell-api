@@ -471,16 +471,7 @@ func GetGoogleAPICNUpstreamAccount(c *gin.Context) {
 		return
 	}
 
-	realKey, resolved, err := service.ResolveNewAPIUpstreamAuthToken(c.Request.Context(), cfg.BaseURL, key, proxy)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	if !resolved {
-		realKey = key
-	}
-
-	account, err := fetchGoogleAPICNUpstreamAccount(c.Request.Context(), cfg, realKey, proxy)
+	account, err := fetchGoogleAPICNUpstreamAccount(c.Request.Context(), cfg, key, proxy)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -493,47 +484,24 @@ func GetGoogleAPICNUpstreamAccount(c *gin.Context) {
 	common.ApiSuccess(c, account)
 }
 
-func fetchGoogleAPICNUpstreamAccount(ctx context.Context, cfg googleAPICNBootstrapConfig, key string, proxy string) (GoogleAPICNUpstreamAccountResponse, error) {
-	accountBaseURL := cfg.AuthBaseURL
-	if accountBaseURL == "" {
-		accountBaseURL = cfg.BaseURL
-	}
-	subscriptionURL := fmt.Sprintf("%s/v1/dashboard/billing/subscription", accountBaseURL)
-	subscriptionBody, err := getResponseBodyWithContext(ctx, http.MethodGet, subscriptionURL, proxy, GetAuthHeader(key))
+func fetchGoogleAPICNUpstreamAccount(ctx context.Context, cfg googleAPICNBootstrapConfig, rawKey string, proxy string) (GoogleAPICNUpstreamAccountResponse, error) {
+	upstreamAccount, resolved, err := service.FetchNewAPIUpstreamAccount(ctx, rawKey, proxy)
 	if err != nil {
 		return GoogleAPICNUpstreamAccountResponse{}, err
 	}
-	subscription := OpenAISubscriptionResponse{}
-	if err = common.Unmarshal(subscriptionBody, &subscription); err != nil {
-		return GoogleAPICNUpstreamAccountResponse{}, err
+	if !resolved {
+		return GoogleAPICNUpstreamAccountResponse{}, errors.New("google-api.cn upstream account requires newapi_login key config")
 	}
 
-	now := time.Now()
-	startDate := fmt.Sprintf("%s-01", now.Format("2006-01"))
-	endDate := now.Format("2006-01-02")
-	if !subscription.HasPaymentMethod {
-		startDate = now.AddDate(0, 0, -100).Format("2006-01-02")
-	}
-	usageURL := fmt.Sprintf("%s/v1/dashboard/billing/usage?start_date=%s&end_date=%s", accountBaseURL, startDate, endDate)
-	usageBody, err := getResponseBodyWithContext(ctx, http.MethodGet, usageURL, proxy, GetAuthHeader(key))
-	if err != nil {
-		return GoogleAPICNUpstreamAccountResponse{}, err
-	}
-	usage := OpenAIUsageResponse{}
-	if err = common.Unmarshal(usageBody, &usage); err != nil {
-		return GoogleAPICNUpstreamAccountResponse{}, err
-	}
-
-	usedUSD := usage.TotalUsage / 100
-	balanceUSD := subscription.HardLimitUSD - usedUSD
+	usedUSD := float64(upstreamAccount.UsedQuota) / common.QuotaPerUnit
+	balanceUSD := float64(upstreamAccount.Quota) / common.QuotaPerUnit
 	return GoogleAPICNUpstreamAccountResponse{
 		APIBaseURL:       cfg.BaseURL,
 		AuthBaseURL:      cfg.AuthBaseURL,
-		TotalUSD:         subscription.HardLimitUSD,
+		TotalUSD:         usedUSD + balanceUSD,
 		UsedUSD:          usedUSD,
 		BalanceUSD:       balanceUSD,
-		AccessUntil:      subscription.AccessUntil,
-		HasPaymentMethod: subscription.HasPaymentMethod,
+		HasPaymentMethod: true,
 		UpdatedAt:        common.GetTimestamp(),
 	}, nil
 }
