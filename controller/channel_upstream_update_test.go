@@ -133,7 +133,9 @@ func TestParseGoogleAPICNPricingModelInfosIgnoresProviderDescriptors(t *testing.
 			"providers": [
 				{"id": "openai", "name": "OpenAI", "icon": "OpenAI"},
 				{"id": "Google", "name": "Google", "icon": "Gemini.Color"},
-				{"id": "SAP AI Core", "name": "SAP AI Core"}
+				{"id": "SAP AI Core", "name": "SAP AI Core"},
+				{"id": "阿里巴巴", "name": "阿里巴巴"},
+				{"id": "讯飞", "name": "讯飞"}
 			],
 			"models": [
 				{"model": "gemini-2.5-flash", "group": "gemini-aistudio"}
@@ -167,6 +169,8 @@ func TestGoogleAPICNFilterModelNamesDropsMetadataArtifacts(t *testing.T) {
 		"Gemini.Color",
 		"SAP AI Core",
 		"VeniceAI",
+		"阿里巴巴",
+		"讯飞",
 	})
 
 	require.Equal(t, []string{"nano-banana"}, result)

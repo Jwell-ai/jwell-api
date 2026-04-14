@@ -542,7 +542,8 @@ func googleAPICNLooksLikeMetadataModelName(name string) bool {
 		"jina", "cloudflare", "siliconflow", "ali", "alibaba", "dashscope",
 		"zhipu", "moonshot", "kimi", "baidu", "tencent", "hunyuan",
 		"volcengine", "byteplus", "deepseek", "mistral", "ollama",
-		"perplexity", "xai", "grok", "helicone", "veniceai":
+		"perplexity", "xai", "grok", "helicone", "veniceai",
+		"阿里巴巴", "讯飞":
 		return true
 	}
 	return false
