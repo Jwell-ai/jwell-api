@@ -628,7 +628,7 @@ func ensureGoogleAPICNModelMetas(models []string) error {
 		}
 		if existingModel, ok := existingByName[name]; ok {
 			updates := map[string]interface{}{}
-			if strings.TrimSpace(existingModel.Endpoints) == "" && endpoints != "" {
+			if shouldUpdateGoogleAPICNModelEndpoints(existingModel, endpoints) {
 				updates["endpoints"] = endpoints
 			}
 			if existingModel.VendorID == 0 && vendorID > 0 {
@@ -664,6 +664,16 @@ func ensureGoogleAPICNModelMetas(models []string) error {
 		common.SysLog(fmt.Sprintf("google-api.cn model metadata synced: created=%d updated=%d", created, updated))
 	}
 	return nil
+}
+
+func shouldUpdateGoogleAPICNModelEndpoints(existingModel model.Model, endpoints string) bool {
+	if strings.TrimSpace(endpoints) == "" {
+		return false
+	}
+	if strings.TrimSpace(existingModel.Endpoints) == "" {
+		return true
+	}
+	return existingModel.SyncOfficial == 0 && strings.TrimSpace(existingModel.Endpoints) != endpoints
 }
 
 func googleAPICNModelEndpoints(modelName string) (string, error) {
@@ -706,10 +716,11 @@ func googleAPICNModelEndpointTypes(modelName string) []constant.EndpointType {
 		strings.Contains(name, "video") ||
 		strings.Contains(name, "seedance"):
 		return []constant.EndpointType{constant.EndpointTypeOpenAIVideo}
+	case googleAPICNIsGeminiNativeImageModel(name):
+		return []constant.EndpointType{constant.EndpointTypeGemini, constant.EndpointTypeOpenAI}
 	case common.IsImageGenerationModel(name) ||
 		strings.Contains(name, "image") ||
 		strings.Contains(name, "imagen") ||
-		strings.Contains(name, "nano-banana") ||
 		strings.Contains(name, "seedream") ||
 		strings.Contains(name, "jimeng"):
 		return []constant.EndpointType{constant.EndpointTypeImageGeneration}
@@ -722,6 +733,12 @@ func googleAPICNModelEndpointTypes(modelName string) []constant.EndpointType {
 	default:
 		return []constant.EndpointType{constant.EndpointTypeOpenAI}
 	}
+}
+
+func googleAPICNIsGeminiNativeImageModel(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	return strings.Contains(name, "nano-banana") ||
+		(strings.Contains(name, "gemini") && strings.Contains(name, "image"))
 }
 
 func googleAPICNModelVendorID(modelName string, cache map[string]int) (int, error) {

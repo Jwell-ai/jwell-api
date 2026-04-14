@@ -235,8 +235,12 @@ func TestGoogleAPICNModelEndpointTypes(t *testing.T) {
 		googleAPICNModelEndpointTypes("claude-opus-4-1-20250805"),
 	)
 	require.Equal(t,
-		[]constant.EndpointType{constant.EndpointTypeImageGeneration},
+		[]constant.EndpointType{constant.EndpointTypeGemini, constant.EndpointTypeOpenAI},
 		googleAPICNModelEndpointTypes("nano-banana-pro-preview"),
+	)
+	require.Equal(t,
+		[]constant.EndpointType{constant.EndpointTypeGemini, constant.EndpointTypeOpenAI},
+		googleAPICNModelEndpointTypes("gemini-3-pro-image-preview"),
 	)
 	require.Equal(t,
 		[]constant.EndpointType{constant.EndpointTypeEmbeddings},
@@ -261,6 +265,33 @@ func TestGoogleAPICNModelEndpointsUsesDefaultPaths(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, common.UnmarshalJsonStr(endpointsJSON, &endpoints))
 	require.Equal(t, "/v1/videos", endpoints[string(constant.EndpointTypeOpenAIVideo)].Path)
+
+	endpointsJSON, err = googleAPICNModelEndpoints("claude-opus-4-1-20250805")
+	require.NoError(t, err)
+	require.NoError(t, common.UnmarshalJsonStr(endpointsJSON, &endpoints))
+	require.Equal(t, "/v1/messages", endpoints[string(constant.EndpointTypeAnthropic)].Path)
+	require.Equal(t, "/v1/chat/completions", endpoints[string(constant.EndpointTypeOpenAI)].Path)
+}
+
+func TestShouldUpdateGoogleAPICNModelEndpoints(t *testing.T) {
+	require.True(t, shouldUpdateGoogleAPICNModelEndpoints(model.Model{
+		Endpoints: "",
+	}, `{"openai":{"path":"/v1/chat/completions","method":"POST"}}`))
+
+	require.True(t, shouldUpdateGoogleAPICNModelEndpoints(model.Model{
+		Endpoints:    `{"image-generation":{"path":"/v1/images/generations","method":"POST"}}`,
+		SyncOfficial: 0,
+	}, `{"gemini":{"path":"/v1beta/models/{model}:generateContent","method":"POST"}}`))
+
+	require.False(t, shouldUpdateGoogleAPICNModelEndpoints(model.Model{
+		Endpoints:    `{"image-generation":{"path":"/v1/images/generations","method":"POST"}}`,
+		SyncOfficial: 1,
+	}, `{"gemini":{"path":"/v1beta/models/{model}:generateContent","method":"POST"}}`))
+
+	require.False(t, shouldUpdateGoogleAPICNModelEndpoints(model.Model{
+		Endpoints:    `{"gemini":{"path":"/v1beta/models/{model}:generateContent","method":"POST"}}`,
+		SyncOfficial: 0,
+	}, ""))
 }
 
 func TestSubtractModelNames(t *testing.T) {
