@@ -397,6 +397,8 @@ func checkAndPersistChannelUpstreamModelUpdates(
 			if err = channel.UpdateAbilities(nil); err != nil {
 				return true, 0, err
 			}
+			refreshChannelRuntimeCache()
+			model.RefreshPricing()
 		}
 		return modelsChanged, 0, fetchErr
 	}
@@ -431,6 +433,8 @@ func checkAndPersistChannelUpstreamModelUpdates(
 		if err = channel.UpdateAbilities(nil); err != nil {
 			return true, autoAdded, err
 		}
+		refreshChannelRuntimeCache()
+		model.RefreshPricing()
 	}
 	return modelsChanged, autoAdded, nil
 }
