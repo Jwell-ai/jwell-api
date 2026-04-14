@@ -126,6 +126,33 @@ func TestParseGoogleAPICNPricingModelInfosIgnoresMetadataStrings(t *testing.T) {
 	}, modelInfos)
 }
 
+func TestParseGoogleAPICNPricingModelInfosIgnoresProviderDescriptors(t *testing.T) {
+	body := []byte(`{
+		"success": true,
+		"data": {
+			"providers": [
+				{"id": "openai", "name": "OpenAI", "icon": "OpenAI"},
+				{"id": "Google", "name": "Google", "icon": "Gemini.Color"},
+				{"id": "SAP AI Core", "name": "SAP AI Core"}
+			],
+			"models": [
+				{"model": "gemini-2.5-flash", "group": "gemini-aistudio"}
+			]
+		}
+	}`)
+
+	models, err := parseGoogleAPICNPricingModels(body)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"gemini-2.5-flash"}, models)
+
+	modelInfos, err := parseGoogleAPICNPricingModelInfos(body)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []googleAPICNModelInfo{
+		{Name: "gemini-2.5-flash", Groups: []string{"gemini-aistudio"}},
+	}, modelInfos)
+}
+
 func TestGoogleAPICNFilterModelNamesDropsMetadataArtifacts(t *testing.T) {
 	result := googleAPICNFilterModelNames([]string{
 		"nano-banana",
@@ -134,6 +161,12 @@ func TestGoogleAPICNFilterModelNamesDropsMetadataArtifacts(t *testing.T) {
 		"POST",
 		"/v1beta/models/{model}:generateContent",
 		"/v1/chat/completions",
+		"openai",
+		"OpenAI",
+		"Google",
+		"Gemini.Color",
+		"SAP AI Core",
+		"VeniceAI",
 	})
 
 	require.Equal(t, []string{"nano-banana"}, result)

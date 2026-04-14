@@ -199,7 +199,7 @@ func EnsureNewAPIUpstreamAuthTokensForGroups(ctx context.Context, baseURL string
 	ensured := 0
 	for _, group := range normalizeNewAPIUpstreamAuthGroups(groups, cfg.Group) {
 		groupCfg := cfg
-		groupCfg.Group = group
+		applyNewAPIUpstreamAuthGroupOverride(&groupCfg, group)
 		tokenID, err := findNewAPIUpstreamToken(ctx, client, authBaseURL, userID, groupCfg.TokenName, groupCfg.Group)
 		if err != nil {
 			return ensured, true, fmt.Errorf("ensure newapi upstream token group %q failed: %w", groupCfg.Group, err)
@@ -270,9 +270,7 @@ func resolveNewAPIUpstreamAuthToken(ctx context.Context, baseURL string, rawKey 
 	if err != nil || !ok {
 		return rawKey, ok, err
 	}
-	if group = strings.TrimSpace(group); group != "" && group != "auto" {
-		cfg.Group = group
-	}
+	applyNewAPIUpstreamAuthGroupOverride(&cfg, group)
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if baseURL == "" {
 		return "", true, errors.New("newapi upstream auth requires channel base_url")
@@ -301,6 +299,24 @@ func resolveNewAPIUpstreamAuthToken(ctx context.Context, baseURL string, rawKey 
 	}
 	LogNewAPIUpstreamAuthTokenDebug("fetch", baseURL, authBaseURL, cfg, token)
 	return token, true, nil
+}
+
+func applyNewAPIUpstreamAuthGroupOverride(cfg *NewAPIUpstreamAuthConfig, group string) {
+	if cfg == nil {
+		return
+	}
+	group = strings.TrimSpace(group)
+	if group == "" || group == "auto" {
+		return
+	}
+	cfg.Group = group
+	if isGoogleAPICNUpstreamAuthProfile(cfg.Profile) {
+		cfg.TokenName = group
+	}
+}
+
+func isGoogleAPICNUpstreamAuthProfile(profile string) bool {
+	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(profile), "-", "_")) == "google_api_cn"
 }
 
 func setNewAPIUpstreamTokenCache(authBaseURL string, cfg NewAPIUpstreamAuthConfig, token string) {
@@ -396,9 +412,7 @@ func invalidateNewAPIUpstreamAuthToken(baseURL string, rawKey string, group stri
 	if err != nil || !ok {
 		return false
 	}
-	if group = strings.TrimSpace(group); group != "" && group != "auto" {
-		cfg.Group = group
-	}
+	applyNewAPIUpstreamAuthGroupOverride(&cfg, group)
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	authBaseURL := cfg.AuthBaseURL
 	if authBaseURL == "" {

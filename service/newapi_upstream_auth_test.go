@@ -266,6 +266,57 @@ func TestResolveNewAPIUpstreamAuthTokenForGroupIgnoresNameOnlyTokenForDifferentG
 	require.Equal(t, "vip", createdPayloadGroup)
 }
 
+func TestResolveGoogleAPICNUpstreamAuthTokenUsesGroupAsTokenName(t *testing.T) {
+	t.Parallel()
+
+	createdPayload := map[string]any{}
+	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/user/login":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"id": 42,
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/token/":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"items": []map[string]any{
+						{"id": 7, "name": "default", "group": "default"},
+						{"id": 8, "name": "gemini-aistudio", "group": "gemini-aistudio"},
+					},
+				},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token/8/key":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"key": "sk-gemini-aistudio",
+				},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token/":
+			require.NoError(t, common.DecodeJson(r.Body, &createdPayload))
+			writeNewAPITestJSON(t, w, map[string]any{"success": true, "message": "", "data": map[string]any{}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer authServer.Close()
+
+	rawKey := `{"type":"newapi_login","profile":"google_api_cn","username":"alice","password":"secret","token_name":"default","group":"default","auth_base_url":"` + authServer.URL + `"}`
+	token, resolved, err := ResolveNewAPIUpstreamAuthTokenForGroup(context.Background(), authServer.URL, rawKey, "", "gemini-aistudio")
+	require.NoError(t, err)
+	require.True(t, resolved)
+	require.Equal(t, "sk-gemini-aistudio", token)
+	require.Empty(t, createdPayload)
+}
+
 func TestEnsureNewAPIUpstreamAuthTokensForGroupsCreatesAndCachesGroupTokens(t *testing.T) {
 	loginCount := 0
 	nextTokenID := 10

@@ -229,6 +229,23 @@ func collectPendingUpstreamModelChanges(channel *model.Channel, settings dto.Cha
 	return pendingAddModels, pendingRemoveModels, nil
 }
 
+func sanitizeChannelModelsForUpstreamModelUpdate(channel *model.Channel) bool {
+	if channel == nil {
+		return false
+	}
+	cfg, ok := loadGoogleAPICNBootstrapConfig()
+	if !ok || !googleAPICNConfigMatchesChannel(channel, cfg) {
+		return false
+	}
+	originModels := normalizeModelNames(channel.GetModels())
+	cleanedModels := googleAPICNFilterModelNames(originModels)
+	if strings.Join(originModels, ",") == strings.Join(cleanedModels, ",") {
+		return false
+	}
+	channel.Models = strings.Join(cleanedModels, ",")
+	return true
+}
+
 func getUpstreamModelUpdateMinCheckIntervalSeconds() int64 {
 	interval := int64(common.GetEnvOrDefault(
 		"CHANNEL_UPSTREAM_MODEL_UPDATE_MIN_CHECK_INTERVAL_SECONDS",
@@ -369,13 +386,19 @@ func checkAndPersistChannelUpstreamModelUpdates(
 		}
 	}
 
+	modelsChanged = sanitizeChannelModelsForUpstreamModelUpdate(channel)
 	pendingAddModels, pendingRemoveModels, fetchErr := collectPendingUpstreamModelChanges(channel, *settings)
 	settings.UpstreamModelUpdateLastCheckTime = now
 	if fetchErr != nil {
-		if err = updateChannelUpstreamModelSettings(channel, *settings, false); err != nil {
+		if err = updateChannelUpstreamModelSettings(channel, *settings, modelsChanged); err != nil {
 			return false, 0, err
 		}
-		return false, 0, fetchErr
+		if modelsChanged {
+			if err = channel.UpdateAbilities(nil); err != nil {
+				return true, 0, err
+			}
+		}
+		return modelsChanged, 0, fetchErr
 	}
 
 	if allowAutoApply && settings.UpstreamModelUpdateAutoSyncEnabled && len(pendingAddModels) > 0 {

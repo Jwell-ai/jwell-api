@@ -420,10 +420,21 @@ func syncGoogleAPICNChannelUpstreamGroupsFromPricing(ctx context.Context, channe
 	if err != nil {
 		return err
 	}
-	upstreamModelGroups := googleAPICNMergeModelGroups(channel.GetModels(), googleAPICNModelInfoGroups(modelInfos, cfg.UpstreamTokenGroup), cfg.UpstreamTokenGroup)
+	cleanedModels := googleAPICNFilterModelNames(channel.GetModels())
+	modelsChanged := strings.Join(normalizeModelNames(channel.GetModels()), ",") != strings.Join(cleanedModels, ",")
+	if modelsChanged {
+		channel.Models = strings.Join(cleanedModels, ",")
+	}
+	upstreamModelGroups := googleAPICNMergeModelGroups(cleanedModels, googleAPICNModelInfoGroups(modelInfos, cfg.UpstreamTokenGroup), cfg.UpstreamTokenGroup)
 	setGoogleAPICNUpstreamGroupMapping(channel, cfg.UpstreamGroupMapping)
 	setGoogleAPICNUpstreamModelGroups(channel, upstreamModelGroups)
-	return model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Update("settings", channel.OtherSettings).Error
+	updates := map[string]interface{}{
+		"settings": channel.OtherSettings,
+	}
+	if modelsChanged {
+		updates["models"] = channel.Models
+	}
+	return model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Updates(updates).Error
 }
 
 func fetchGoogleAPICNModelInfos(ctx context.Context, channel *model.Channel, cfg googleAPICNBootstrapConfig) ([]googleAPICNModelInfo, error) {
@@ -502,12 +513,19 @@ func googleAPICNLooksLikeMetadataModelName(name string) bool {
 	if name == "" {
 		return true
 	}
+	lower := strings.ToLower(name)
 	upper := strings.ToUpper(name)
 	switch upper {
 	case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS":
 		return true
 	}
-	if strings.HasPrefix(name, "/") || strings.HasPrefix(strings.ToLower(name), "http://") || strings.HasPrefix(strings.ToLower(name), "https://") {
+	if strings.HasPrefix(name, "/") || strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		return true
+	}
+	if strings.HasSuffix(lower, ".color") {
+		return true
+	}
+	if strings.ContainsAny(name, " \t\r\n") {
 		return true
 	}
 	if len(name) == 32 {
@@ -516,6 +534,15 @@ func googleAPICNLooksLikeMetadataModelName(name string) bool {
 				return false
 			}
 		}
+		return true
+	}
+	switch lower {
+	case "openai", "azureopenai", "google", "gemini", "vertex", "vertexai",
+		"anthropic", "claude", "aws", "bedrock", "cohere", "minimax",
+		"jina", "cloudflare", "siliconflow", "ali", "alibaba", "dashscope",
+		"zhipu", "moonshot", "kimi", "baidu", "tencent", "hunyuan",
+		"volcengine", "byteplus", "deepseek", "mistral", "ollama",
+		"perplexity", "xai", "grok", "helicone", "veniceai":
 		return true
 	}
 	return false
@@ -1055,7 +1082,7 @@ func normalizeGoogleAPICNPricingModelInfos(modelInfos []googleAPICNModelInfo) []
 	names := make([]string, 0, len(modelInfos))
 	for _, item := range modelInfos {
 		name := strings.TrimSpace(item.Name)
-		if name == "" {
+		if name == "" || googleAPICNLooksLikeMetadataModelName(name) {
 			continue
 		}
 		if _, ok := modelGroups[name]; !ok {
