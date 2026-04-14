@@ -87,11 +87,56 @@ func TestParseGoogleAPICNPricingModelInfosInheritsGroupKeys(t *testing.T) {
 	modelInfos, err := parseGoogleAPICNPricingModelInfos(body)
 
 	require.NoError(t, err)
-	require.Equal(t, []googleAPICNModelInfo{
+	require.ElementsMatch(t, []googleAPICNModelInfo{
 		{Name: "gpt-4o", Groups: []string{"default"}},
 		{Name: "claude-3-5-sonnet", Groups: []string{"vip"}},
 		{Name: "ignored-channel-type", Groups: []string{}},
 	}, modelInfos)
+}
+
+func TestParseGoogleAPICNPricingModelInfosIgnoresMetadataStrings(t *testing.T) {
+	body := []byte(`{
+		"success": true,
+		"pricing_version": "a42d372ccf0b5dd13ecf71203521f9d2",
+		"data": {
+			"models": [
+				{
+					"model": "nano-banana",
+					"group": "gemini",
+					"endpoints": {
+						"openai": {"method": "POST", "path": "/v1/chat/completions"},
+						"gemini": {"method": "POST", "path": "/v1beta/models/{model}:generateContent"}
+					}
+				}
+			],
+			"endpoints": ["/v1/messages"],
+			"method": "POST"
+		}
+	}`)
+
+	models, err := parseGoogleAPICNPricingModels(body)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"nano-banana"}, models)
+
+	modelInfos, err := parseGoogleAPICNPricingModelInfos(body)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []googleAPICNModelInfo{
+		{Name: "nano-banana", Groups: []string{"gemini"}},
+	}, modelInfos)
+}
+
+func TestGoogleAPICNFilterModelNamesDropsMetadataArtifacts(t *testing.T) {
+	result := googleAPICNFilterModelNames([]string{
+		"nano-banana",
+		"a42d372ccf0b5dd13ecf71203521f9d2",
+		"/v1/messages",
+		"POST",
+		"/v1beta/models/{model}:generateContent",
+		"/v1/chat/completions",
+	})
+
+	require.Equal(t, []string{"nano-banana"}, result)
 }
 
 func TestParseGoogleAPICNGroupMapping(t *testing.T) {

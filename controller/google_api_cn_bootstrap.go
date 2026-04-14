@@ -292,7 +292,7 @@ func syncGoogleAPICNChannel(ctx context.Context, channel *model.Channel, cfg goo
 
 	models := googleAPICNModelInfoNames(modelInfos)
 	upstreamModelGroups := googleAPICNModelInfoGroups(modelInfos, cfg.UpstreamTokenGroup)
-	mergedModels := mergeModelNames(channel.GetModels(), models)
+	mergedModels := mergeModelNames(googleAPICNFilterModelNames(channel.GetModels()), models)
 	mergedUpstreamModelGroups := googleAPICNMergeModelGroups(mergedModels, upstreamModelGroups, cfg.UpstreamTokenGroup)
 	setGoogleAPICNUpstreamModelGroups(channel, mergedUpstreamModelGroups)
 	modelsChanged := strings.Join(normalizeModelNames(channel.GetModels()), ",") != strings.Join(mergedModels, ",")
@@ -459,14 +459,14 @@ func googleAPICNModelInfoNames(modelInfos []googleAPICNModelInfo) []string {
 	for _, item := range modelInfos {
 		names = append(names, item.Name)
 	}
-	return normalizeModelNames(names)
+	return googleAPICNFilterModelNames(names)
 }
 
 func googleAPICNModelInfoGroups(modelInfos []googleAPICNModelInfo, fallbackGroup string) map[string][]string {
 	modelGroups := make(map[string][]string, len(modelInfos))
 	for _, item := range modelInfos {
 		name := strings.TrimSpace(item.Name)
-		if name == "" {
+		if name == "" || googleAPICNLooksLikeMetadataModelName(name) {
 			continue
 		}
 		modelGroups[name] = mergeModelNames(modelGroups[name], googleAPICNNormalizeGroups(item.Groups, fallbackGroup))
@@ -476,15 +476,49 @@ func googleAPICNModelInfoGroups(modelInfos []googleAPICNModelInfo, fallbackGroup
 
 func googleAPICNMergeModelGroups(models []string, modelGroups map[string][]string, fallbackGroup string) map[string][]string {
 	merged := make(map[string][]string, len(models))
-	for modelName, groups := range modelGroups {
-		merged[modelName] = googleAPICNNormalizeGroups(groups, fallbackGroup)
-	}
-	for _, modelName := range normalizeModelNames(models) {
+	for _, modelName := range googleAPICNFilterModelNames(models) {
+		groups := modelGroups[modelName]
 		if len(merged[modelName]) == 0 {
-			merged[modelName] = googleAPICNNormalizeGroups(nil, fallbackGroup)
+			merged[modelName] = googleAPICNNormalizeGroups(groups, fallbackGroup)
 		}
 	}
 	return merged
+}
+
+func googleAPICNFilterModelNames(models []string) []string {
+	names := normalizeModelNames(models)
+	filtered := make([]string, 0, len(names))
+	for _, name := range names {
+		if googleAPICNLooksLikeMetadataModelName(name) {
+			continue
+		}
+		filtered = append(filtered, name)
+	}
+	return filtered
+}
+
+func googleAPICNLooksLikeMetadataModelName(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return true
+	}
+	upper := strings.ToUpper(name)
+	switch upper {
+	case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS":
+		return true
+	}
+	if strings.HasPrefix(name, "/") || strings.HasPrefix(strings.ToLower(name), "http://") || strings.HasPrefix(strings.ToLower(name), "https://") {
+		return true
+	}
+	if len(name) == 32 {
+		for _, r := range name {
+			if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func googleAPICNNormalizeGroups(groups []string, fallbackGroup string) []string {
@@ -960,6 +994,9 @@ func googleAPICNPricingMapKeyCanContainModels(key string, value any) bool {
 	if key == "" {
 		return false
 	}
+	if googleAPICNPricingMapKeyIsMetadata(key) {
+		return false
+	}
 	switch key {
 	case "success", "message", "error", "code", "vendor", "vendor_name", "provider", "provider_name",
 		"display_name", "description", "object", "type", "tags", "price", "prices", "pricing", "model_price",
@@ -983,6 +1020,9 @@ func googleAPICNPricingMapKeyLooksLikeGroup(key string) bool {
 	if key == "" {
 		return false
 	}
+	if googleAPICNPricingMapKeyIsMetadata(key) {
+		return false
+	}
 	switch key {
 	case "success", "message", "error", "code", "data", "items", "models", "list", "prices", "pricing",
 		"model_prices", "providers", "provider", "provider_name", "vendor", "vendor_name", "display_name",
@@ -994,6 +1034,20 @@ func googleAPICNPricingMapKeyLooksLikeGroup(key string) bool {
 		return false
 	}
 	return !strings.ContainsAny(key, " \t\r\n/")
+}
+
+func googleAPICNPricingMapKeyIsMetadata(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "pricing_version", "version", "versions", "api_version", "api_versions",
+		"endpoint", "endpoints", "endpoint_type", "endpoint_types",
+		"path", "paths", "url", "urls", "uri", "uris", "route", "routes",
+		"method", "methods", "http_method", "http_methods",
+		"request_path", "request_paths", "request_method", "request_methods",
+		"base_url", "base_urls", "api_base_url", "auth_base_url":
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeGoogleAPICNPricingModelInfos(modelInfos []googleAPICNModelInfo) []googleAPICNModelInfo {

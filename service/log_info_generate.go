@@ -62,6 +62,9 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 		adminInfo["is_multi_key"] = true
 		adminInfo["multi_key_index"] = common.GetContextKeyInt(ctx, constant.ContextKeyChannelMultiKeyIndex)
 	}
+	if upstreamAuthGroup := strings.TrimSpace(common.GetContextKeyString(ctx, constant.ContextKeyChannelUpstreamAuthGroup)); upstreamAuthGroup != "" {
+		adminInfo["upstream_auth_group"] = upstreamAuthGroup
+	}
 
 	isLocalCountTokens := common.GetContextKeyBool(ctx, constant.ContextKeyLocalCountTokens)
 	if isLocalCountTokens {

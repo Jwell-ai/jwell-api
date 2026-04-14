@@ -398,6 +398,9 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 			adminInfo["is_multi_key"] = true
 			adminInfo["multi_key_index"] = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
 		}
+		if upstreamAuthGroup := strings.TrimSpace(common.GetContextKeyString(c, constant.ContextKeyChannelUpstreamAuthGroup)); upstreamAuthGroup != "" {
+			adminInfo["upstream_auth_group"] = upstreamAuthGroup
+		}
 		service.AppendChannelAffinityAdminInfo(c, adminInfo)
 		other["admin_info"] = adminInfo
 		startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
