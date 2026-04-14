@@ -243,13 +243,7 @@ const Home = () => {
                       size={isMobile ? 'default' : 'large'}
                       className='flex items-center !rounded-3xl px-6 py-2'
                       icon={<IconFile />}
-                      onClick={() => {
-                        if (docsLink) {
-                          window.open(docsLink, '_blank');
-                          return;
-                        }
-                        window.location.href = '/docs';
-                      }}
+                      onClick={() => window.location.href = '/docs'}
                     >
                       {t('文档')}
                     </Button>

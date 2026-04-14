@@ -9,7 +9,9 @@ import (
 	"github.com/Jwell-ai/jwell-api/common"
 	"github.com/Jwell-ai/jwell-api/i18n"
 	"github.com/Jwell-ai/jwell-api/model"
+	"github.com/Jwell-ai/jwell-api/service"
 	"github.com/Jwell-ai/jwell-api/setting/operation_setting"
+	"github.com/Jwell-ai/jwell-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -29,6 +31,34 @@ func buildMaskedTokenResponses(tokens []*model.Token) []*model.Token {
 		maskedTokens = append(maskedTokens, buildMaskedTokenResponse(token))
 	}
 	return maskedTokens
+}
+
+func validateUserTokenGroup(c *gin.Context, tokenGroup string) bool {
+	tokenGroup = strings.TrimSpace(tokenGroup)
+	if tokenGroup == "" {
+		return true
+	}
+	userGroup := strings.TrimSpace(c.GetString("user_group"))
+	if userGroup == "" {
+		userGroup = strings.TrimSpace(c.GetString("group"))
+	}
+	if userGroup == "" {
+		var err error
+		userGroup, err = model.GetUserGroup(c.GetInt("id"), false)
+		if err != nil {
+			common.ApiError(c, err)
+			return false
+		}
+	}
+	if _, ok := service.GetUserUsableGroups(userGroup)[tokenGroup]; !ok {
+		common.ApiErrorMsg(c, fmt.Sprintf("无权访问 %s 分组", tokenGroup))
+		return false
+	}
+	if tokenGroup != "auto" && !ratio_setting.ContainsGroupRatio(tokenGroup) {
+		common.ApiErrorMsg(c, fmt.Sprintf("分组 %s 已被弃用", tokenGroup))
+		return false
+	}
+	return true
 }
 
 func GetAllTokens(c *gin.Context) {
@@ -175,6 +205,10 @@ func AddToken(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgTokenNameTooLong)
 		return
 	}
+	token.Group = strings.TrimSpace(token.Group)
+	if !validateUserTokenGroup(c, token.Group) {
+		return
+	}
 	// 非无限额度时，检查额度值是否超出有效范围
 	if !token.UnlimitedQuota {
 		if token.RemainQuota < 0 {
@@ -258,6 +292,10 @@ func UpdateToken(c *gin.Context) {
 	}
 	if len(token.Name) > 50 {
 		common.ApiErrorI18n(c, i18n.MsgTokenNameTooLong)
+		return
+	}
+	token.Group = strings.TrimSpace(token.Group)
+	if !validateUserTokenGroup(c, token.Group) {
 		return
 	}
 	if !token.UnlimitedQuota {
