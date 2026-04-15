@@ -7,6 +7,7 @@ import (
 
 	"github.com/Jwell-ai/jwell-api/common"
 	"github.com/Jwell-ai/jwell-api/model"
+	"github.com/Jwell-ai/jwell-api/service"
 	"github.com/Jwell-ai/jwell-api/setting"
 	"github.com/Jwell-ai/jwell-api/setting/console_setting"
 	"github.com/Jwell-ai/jwell-api/setting/operation_setting"
@@ -317,6 +318,7 @@ func UpdateOption(c *gin.Context) {
 		return
 	}
 	if strings.HasPrefix(option.Key, "google_api_cn.") {
+		service.ClearNewAPIUpstreamTokenCache()
 		ScheduleGoogleAPICNBootstrapTask()
 	}
 	c.JSON(http.StatusOK, gin.H{

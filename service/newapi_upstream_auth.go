@@ -27,6 +27,7 @@ const (
 	newAPIUpstreamTokenCacheTTL     = 30 * time.Minute
 	newAPIUpstreamAuthDebugEnv      = "NEWAPI_UPSTREAM_AUTH_DEBUG"
 	googleAPICNAuthDebugEnv         = "GOOGLE_API_CN_DEBUG_AUTH_TOKEN"
+	newAPIUpstreamTokenRedisPrefix  = "newapi:upstream_auth:token"
 )
 
 type NewAPIUpstreamAuthConfig struct {
@@ -196,23 +197,20 @@ func EnsureNewAPIUpstreamAuthTokensForGroups(ctx context.Context, baseURL string
 		return 0, true, errors.New("newapi upstream login returned invalid user id")
 	}
 
+	syncedTokens, _, err := syncNewAPIUpstreamTokenCatalog(ctx, client, authBaseURL, userID, cfg)
+	if err != nil {
+		return 0, true, err
+	}
+
 	ensured := 0
 	for _, group := range normalizeNewAPIUpstreamAuthGroups(groups, cfg.Group) {
 		groupCfg := cfg
 		applyNewAPIUpstreamAuthGroupOverride(&groupCfg, group)
-		tokenID, err := findNewAPIUpstreamToken(ctx, client, authBaseURL, userID, groupCfg.TokenName, groupCfg.Group)
-		if err != nil {
-			return ensured, true, fmt.Errorf("ensure newapi upstream token group %q failed: %w", groupCfg.Group, err)
-		}
-		if tokenID == 0 {
+		if !newAPIUpstreamTokenExists(syncedTokens, groupCfg) {
 			common.SysLog(fmt.Sprintf("newapi upstream token prefetch skipped: token_name=%s group=%s not found", groupCfg.TokenName, groupCfg.Group))
 			continue
 		}
-		token, err := getNewAPIUpstreamTokenKey(ctx, client, authBaseURL, userID, tokenID)
-		if err != nil {
-			return ensured, true, fmt.Errorf("ensure newapi upstream token group %q failed: %w", groupCfg.Group, err)
-		}
-		setNewAPIUpstreamTokenCache(authBaseURL, groupCfg, token)
+		token, _ := getNewAPIUpstreamTokenFromCatalog(syncedTokens, groupCfg)
 		LogNewAPIUpstreamAuthTokenDebug("ensure", baseURL, authBaseURL, groupCfg, token)
 		ensured++
 	}
@@ -282,6 +280,12 @@ func resolveNewAPIUpstreamAuthToken(ctx context.Context, baseURL string, rawKey 
 	}
 	newAPIUpstreamTokenCacheMu.Unlock()
 
+	if token, ok := getNewAPIUpstreamTokenFromRedis(authBaseURL, cfg); ok {
+		setNewAPIUpstreamTokenMemoryCache(authBaseURL, cfg, token)
+		LogNewAPIUpstreamAuthTokenDebug("redis", baseURL, authBaseURL, cfg, token)
+		return token, true, nil
+	}
+
 	token, err := fetchNewAPIUpstreamToken(ctx, authBaseURL, cfg, proxy)
 	if err == nil && token != "" {
 		setNewAPIUpstreamTokenCache(authBaseURL, cfg, token)
@@ -312,6 +316,11 @@ func isGoogleAPICNUpstreamAuthProfile(profile string) bool {
 }
 
 func setNewAPIUpstreamTokenCache(authBaseURL string, cfg NewAPIUpstreamAuthConfig, token string) {
+	setNewAPIUpstreamTokenMemoryCache(authBaseURL, cfg, token)
+	setNewAPIUpstreamTokenRedisCache(authBaseURL, cfg, token)
+}
+
+func setNewAPIUpstreamTokenMemoryCache(authBaseURL string, cfg NewAPIUpstreamAuthConfig, token string) {
 	if strings.TrimSpace(token) == "" {
 		return
 	}
@@ -321,6 +330,60 @@ func setNewAPIUpstreamTokenCache(authBaseURL string, cfg NewAPIUpstreamAuthConfi
 		expiresAt: time.Now().Add(newAPIUpstreamTokenCacheTTL),
 	}
 	newAPIUpstreamTokenCacheMu.Unlock()
+}
+
+func setNewAPIUpstreamTokenRedisCache(authBaseURL string, cfg NewAPIUpstreamAuthConfig, token string) {
+	if strings.TrimSpace(token) == "" || !common.RedisEnabled || common.RDB == nil {
+		return
+	}
+	if err := common.RedisHSetField(newAPIUpstreamAuthRedisKey(authBaseURL, cfg), newAPIUpstreamAuthRedisField(cfg.TokenName, cfg.Group), token); err != nil {
+		common.SysError("set newapi upstream token redis cache failed: " + err.Error())
+	}
+}
+
+func getNewAPIUpstreamTokenFromRedis(authBaseURL string, cfg NewAPIUpstreamAuthConfig) (string, bool) {
+	if !common.RedisEnabled || common.RDB == nil {
+		return "", false
+	}
+
+	key := newAPIUpstreamAuthRedisKey(authBaseURL, cfg)
+	fields := []string{newAPIUpstreamAuthRedisField(cfg.TokenName, cfg.Group)}
+	if cfg.Group == "" || cfg.Group == defaultNewAPIUpstreamTokenGroup {
+		fallbackField := newAPIUpstreamAuthRedisField(cfg.TokenName, "")
+		if fallbackField != fields[0] {
+			fields = append(fields, fallbackField)
+		}
+	}
+
+	for _, field := range fields {
+		token, err := common.RedisHGetField(key, field)
+		if err == nil && strings.TrimSpace(token) != "" {
+			return token, true
+		}
+	}
+	return "", false
+}
+
+func newAPIUpstreamTokenExists(tokens map[string]string, cfg NewAPIUpstreamAuthConfig) bool {
+	_, ok := getNewAPIUpstreamTokenFromCatalog(tokens, cfg)
+	return ok
+}
+
+func getNewAPIUpstreamTokenFromCatalog(tokens map[string]string, cfg NewAPIUpstreamAuthConfig) (string, bool) {
+	if len(tokens) == 0 {
+		return "", false
+	}
+	field := newAPIUpstreamAuthRedisField(cfg.TokenName, cfg.Group)
+	if token := strings.TrimSpace(tokens[field]); token != "" {
+		return token, true
+	}
+	if cfg.Group == "" || cfg.Group == defaultNewAPIUpstreamTokenGroup {
+		field = newAPIUpstreamAuthRedisField(cfg.TokenName, "")
+		if token := strings.TrimSpace(tokens[field]); token != "" {
+			return token, true
+		}
+	}
+	return "", false
 }
 
 func normalizeNewAPIUpstreamAuthGroups(groups []string, fallbackGroup string) []string {
@@ -399,6 +462,14 @@ func InvalidateNewAPIUpstreamAuthTokenForGroup(baseURL string, rawKey string, gr
 	return invalidateNewAPIUpstreamAuthToken(baseURL, rawKey, group)
 }
 
+func ClearNewAPIUpstreamTokenCache() int {
+	newAPIUpstreamTokenCacheMu.Lock()
+	defer newAPIUpstreamTokenCacheMu.Unlock()
+	cleared := len(newAPIUpstreamTokenCache)
+	newAPIUpstreamTokenCache = map[string]newAPIUpstreamTokenCacheItem{}
+	return cleared
+}
+
 func invalidateNewAPIUpstreamAuthToken(baseURL string, rawKey string, group string) bool {
 	cfg, ok, err := ParseNewAPIUpstreamAuthConfig(rawKey)
 	if err != nil || !ok {
@@ -414,13 +485,39 @@ func invalidateNewAPIUpstreamAuthToken(baseURL string, rawKey string, group stri
 		return false
 	}
 	cacheKey := newAPIUpstreamAuthCacheKey(authBaseURL, cfg)
+	invalidated := false
 	newAPIUpstreamTokenCacheMu.Lock()
-	defer newAPIUpstreamTokenCacheMu.Unlock()
-	if _, exists := newAPIUpstreamTokenCache[cacheKey]; !exists {
-		return false
+	if _, exists := newAPIUpstreamTokenCache[cacheKey]; exists {
+		delete(newAPIUpstreamTokenCache, cacheKey)
+		invalidated = true
 	}
-	delete(newAPIUpstreamTokenCache, cacheKey)
-	return true
+	if (cfg.Group == "" || cfg.Group == defaultNewAPIUpstreamTokenGroup) && cfg.Group != "" {
+		fallbackCfg := cfg
+		fallbackCfg.Group = ""
+		fallbackCacheKey := newAPIUpstreamAuthCacheKey(authBaseURL, fallbackCfg)
+		if _, exists := newAPIUpstreamTokenCache[fallbackCacheKey]; exists {
+			delete(newAPIUpstreamTokenCache, fallbackCacheKey)
+			invalidated = true
+		}
+	}
+	newAPIUpstreamTokenCacheMu.Unlock()
+
+	if !common.RedisEnabled || common.RDB == nil {
+		return invalidated
+	}
+
+	fields := []string{newAPIUpstreamAuthRedisField(cfg.TokenName, cfg.Group)}
+	if cfg.Group == "" || cfg.Group == defaultNewAPIUpstreamTokenGroup {
+		fallbackField := newAPIUpstreamAuthRedisField(cfg.TokenName, "")
+		if fallbackField != fields[0] {
+			fields = append(fields, fallbackField)
+		}
+	}
+	if err := common.RedisHDelField(newAPIUpstreamAuthRedisKey(authBaseURL, cfg), fields...); err != nil {
+		common.SysError("invalidate newapi upstream token redis cache failed: " + err.Error())
+		return invalidated
+	}
+	return invalidated || len(fields) > 0
 }
 
 func newAPIUpstreamAuthCacheKey(baseURL string, cfg NewAPIUpstreamAuthConfig) string {
@@ -432,6 +529,23 @@ func newAPIUpstreamAuthCacheKey(baseURL string, cfg NewAPIUpstreamAuthConfig) st
 		cfg.Group,
 		hex.EncodeToString(passwordHash[:]),
 	}, "\x00")
+}
+
+func newAPIUpstreamAuthRedisKey(baseURL string, cfg NewAPIUpstreamAuthConfig) string {
+	passwordHash := sha256.Sum256([]byte(cfg.Password))
+	accountHash := sha256.Sum256([]byte(strings.Join([]string{
+		strings.TrimRight(strings.TrimSpace(baseURL), "/"),
+		strings.TrimSpace(cfg.Username),
+		hex.EncodeToString(passwordHash[:]),
+	}, "\x00")))
+	return fmt.Sprintf("%s:%s", newAPIUpstreamTokenRedisPrefix, hex.EncodeToString(accountHash[:]))
+}
+
+func newAPIUpstreamAuthRedisField(tokenName string, group string) string {
+	return strings.Join([]string{
+		strings.TrimSpace(tokenName),
+		strings.TrimSpace(group),
+	}, "\x1f")
 }
 
 type newAPIResponse[T any] struct {
@@ -528,17 +642,90 @@ func fetchNewAPIUpstreamToken(ctx context.Context, baseURL string, cfg NewAPIUps
 		return "", errors.New("newapi upstream login returned invalid user id")
 	}
 
-	tokenID, err := findNewAPIUpstreamToken(ctx, client, baseURL, userID, cfg.TokenName, cfg.Group)
+	tokens, items, err := syncNewAPIUpstreamTokenCatalog(ctx, client, baseURL, userID, cfg)
 	if err != nil {
 		return "", err
 	}
-	if tokenID == 0 {
-		if cfg.Group != "" {
-			return "", fmt.Errorf("newapi upstream token %q group %q not found", cfg.TokenName, cfg.Group)
-		}
-		return "", fmt.Errorf("newapi upstream token %q not found", cfg.TokenName)
+	if token, ok := getNewAPIUpstreamTokenFromCatalog(tokens, cfg); ok {
+		return token, nil
 	}
-	return getNewAPIUpstreamTokenKey(ctx, client, baseURL, userID, tokenID)
+	tokenID := findNewAPIUpstreamTokenInItems(items, cfg.TokenName, cfg.Group)
+	if tokenID != 0 {
+		token, err := getNewAPIUpstreamTokenKey(ctx, client, baseURL, userID, tokenID)
+		if err != nil {
+			return "", err
+		}
+		setNewAPIUpstreamTokenCache(baseURL, cfg, token)
+		return token, nil
+	}
+	if cfg.Group != "" {
+		return "", fmt.Errorf("newapi upstream token %q group %q not found", cfg.TokenName, cfg.Group)
+	}
+	return "", fmt.Errorf("newapi upstream token %q not found", cfg.TokenName)
+}
+
+func syncNewAPIUpstreamTokenCatalog(ctx context.Context, client *http.Client, baseURL string, userID int, cfg NewAPIUpstreamAuthConfig) (map[string]string, []newAPITokenItem, error) {
+	items, err := listNewAPIUpstreamTokens(ctx, client, baseURL, userID)
+	if err != nil {
+		return nil, nil, err
+	}
+	tokens := make(map[string]string, len(items))
+	for _, item := range items {
+		token, err := getNewAPIUpstreamTokenKey(ctx, client, baseURL, userID, item.ID)
+		if err != nil {
+			common.SysError(fmt.Sprintf("newapi upstream token sync skipped: token_name=%s group=%s err=%s", item.Name, strings.TrimSpace(item.Group), err.Error()))
+			continue
+		}
+		itemCfg := cfg
+		itemCfg.TokenName = strings.TrimSpace(item.Name)
+		itemCfg.Group = strings.TrimSpace(item.Group)
+		field := newAPIUpstreamAuthRedisField(itemCfg.TokenName, itemCfg.Group)
+		tokens[field] = token
+		setNewAPIUpstreamTokenCache(baseURL, itemCfg, token)
+	}
+	return tokens, items, nil
+}
+
+func listNewAPIUpstreamTokens(ctx context.Context, client *http.Client, baseURL string, userID int) ([]newAPITokenItem, error) {
+	var result newAPIResponse[newAPITokenPage]
+	if err := doNewAPIJSON(ctx, client, http.MethodGet, baseURL+"/api/token/?p=1&size=100", userID, nil, &result); err != nil {
+		return nil, err
+	}
+	if !result.Success {
+		return nil, fmt.Errorf("newapi upstream token list failed: %s", result.Message)
+	}
+	return result.Data.Items, nil
+}
+
+func findNewAPIUpstreamToken(ctx context.Context, client *http.Client, baseURL string, userID int, tokenName string, group string) (int, error) {
+	items, err := listNewAPIUpstreamTokens(ctx, client, baseURL, userID)
+	if err != nil {
+		return 0, err
+	}
+	return findNewAPIUpstreamTokenInItems(items, tokenName, group), nil
+}
+
+func findNewAPIUpstreamTokenInItems(items []newAPITokenItem, tokenName string, group string) int {
+	var nameOnlyMatch int
+	for _, item := range items {
+		if item.Name != tokenName {
+			continue
+		}
+		itemGroup := strings.TrimSpace(item.Group)
+		if itemGroup == "" {
+			if nameOnlyMatch == 0 && (group == "" || group == defaultNewAPIUpstreamTokenGroup) {
+				nameOnlyMatch = item.ID
+			}
+			continue
+		}
+		if itemGroup == group {
+			return item.ID
+		}
+	}
+	if nameOnlyMatch != 0 {
+		return nameOnlyMatch
+	}
+	return 0
 }
 
 func newNewAPIUpstreamHTTPClient(proxy string) (*http.Client, error) {
@@ -580,37 +767,6 @@ func loginNewAPIUpstream(ctx context.Context, client *http.Client, baseURL strin
 		return 0, errors.New("newapi upstream login requires 2FA")
 	}
 	return result.Data.ID, nil
-}
-
-func findNewAPIUpstreamToken(ctx context.Context, client *http.Client, baseURL string, userID int, tokenName string, group string) (int, error) {
-	group = strings.TrimSpace(group)
-	var result newAPIResponse[newAPITokenPage]
-	if err := doNewAPIJSON(ctx, client, http.MethodGet, baseURL+"/api/token/?p=1&size=100", userID, nil, &result); err != nil {
-		return 0, err
-	}
-	if !result.Success {
-		return 0, fmt.Errorf("newapi upstream token list failed: %s", result.Message)
-	}
-	var nameOnlyMatch int
-	for _, item := range result.Data.Items {
-		if item.Name != tokenName {
-			continue
-		}
-		itemGroup := strings.TrimSpace(item.Group)
-		if itemGroup == "" {
-			if nameOnlyMatch == 0 && (group == "" || group == defaultNewAPIUpstreamTokenGroup) {
-				nameOnlyMatch = item.ID
-			}
-			continue
-		}
-		if itemGroup == group {
-			return item.ID, nil
-		}
-	}
-	if nameOnlyMatch != 0 {
-		return nameOnlyMatch, nil
-	}
-	return 0, nil
 }
 
 func createNewAPIUpstreamToken(ctx context.Context, client *http.Client, baseURL string, userID int, cfg NewAPIUpstreamAuthConfig) error {

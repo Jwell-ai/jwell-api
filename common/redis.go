@@ -303,6 +303,7 @@ func RedisHSetField(key, field string, value interface{}) error {
 	if DebugEnabled {
 		SysLog(fmt.Sprintf("Redis HSET field: key=%s, field=%s, value=%v", key, field, value))
 	}
+	ctx := context.Background()
 	ttlCmd := RDB.TTL(context.Background(), key)
 	ttl, err := ttlCmd.Result()
 	if err != nil && !errors.Is(err, redis.Nil) {
@@ -310,7 +311,6 @@ func RedisHSetField(key, field string, value interface{}) error {
 	}
 
 	if ttl > 0 {
-		ctx := context.Background()
 		txn := RDB.TxPipeline()
 
 		hsetCmd := txn.HSet(ctx, key, field, value)
@@ -323,5 +323,21 @@ func RedisHSetField(key, field string, value interface{}) error {
 		_, err = txn.Exec(ctx)
 		return err
 	}
-	return nil
+	return RDB.HSet(ctx, key, field, value).Err()
+}
+
+func RedisHGetField(key, field string) (string, error) {
+	if DebugEnabled {
+		SysLog(fmt.Sprintf("Redis HGET field: key=%s, field=%s", key, field))
+	}
+	ctx := context.Background()
+	return RDB.HGet(ctx, key, field).Result()
+}
+
+func RedisHDelField(key string, fields ...string) error {
+	if DebugEnabled {
+		SysLog(fmt.Sprintf("Redis HDEL field: key=%s, fields=%v", key, fields))
+	}
+	ctx := context.Background()
+	return RDB.HDel(ctx, key, fields...).Err()
 }

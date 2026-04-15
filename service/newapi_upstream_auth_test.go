@@ -10,6 +10,8 @@ import (
 	"github.com/Jwell-ai/jwell-api/common"
 	"github.com/Jwell-ai/jwell-api/dto"
 	"github.com/Jwell-ai/jwell-api/setting/operation_setting"
+	"github.com/alicebob/miniredis/v2"
+	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/require"
 )
 
@@ -20,6 +22,27 @@ func withGoogleAPICNSetting(t *testing.T, mutate func(*operation_setting.GoogleA
 	mutate(setting)
 	t.Cleanup(func() {
 		*setting = original
+	})
+}
+
+func withMiniredis(t *testing.T) {
+	t.Helper()
+
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+
+	originalEnabled := common.RedisEnabled
+	originalRDB := common.RDB
+	common.RedisEnabled = true
+	common.RDB = redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	ClearNewAPIUpstreamTokenCache()
+
+	t.Cleanup(func() {
+		ClearNewAPIUpstreamTokenCache()
+		_ = common.RDB.Close()
+		common.RDB = originalRDB
+		common.RedisEnabled = originalEnabled
+		mr.Close()
 	})
 }
 
@@ -396,6 +419,104 @@ func TestEnsureNewAPIUpstreamAuthTokensForGroupsSkipsMissingGroups(t *testing.T)
 	require.Equal(t, 2, loginCount)
 }
 
+func TestResolveNewAPIUpstreamAuthTokenReadsFromRedisSharedCache(t *testing.T) {
+	withMiniredis(t)
+
+	rawKey := `{"type":"newapi_login","username":"alice","password":"secret","token_name":"jwell-upstream","group":"default"}`
+	cfg, ok, err := ParseNewAPIUpstreamAuthConfig(rawKey)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	authBaseURL := "https://auth.redis.example"
+	require.NoError(t, common.RedisHSetField(
+		newAPIUpstreamAuthRedisKey(authBaseURL, cfg),
+		newAPIUpstreamAuthRedisField(cfg.TokenName, cfg.Group),
+		"sk-from-redis",
+	))
+
+	token, resolved, err := ResolveNewAPIUpstreamAuthToken(context.Background(), authBaseURL, rawKey, "")
+	require.NoError(t, err)
+	require.True(t, resolved)
+	require.Equal(t, "sk-from-redis", token)
+}
+
+func TestEnsureNewAPIUpstreamAuthTokensForGroupsSyncsAllTokensToRedis(t *testing.T) {
+	withMiniredis(t)
+
+	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/user/login":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data":    map[string]any{"id": 42},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/token/":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"items": []map[string]any{
+						{"id": 7, "name": "default", "group": "default"},
+						{"id": 8, "name": "gemini-official", "group": "gemini-official"},
+					},
+				},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token/7/key":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data":    map[string]any{"key": "sk-default"},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/token/8/key":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data":    map[string]any{"key": "sk-gemini"},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer authServer.Close()
+
+	rawKey := `{"type":"newapi_login","profile":"google_api_cn","username":"alice","password":"secret","token_name":"default","group":"default","auth_base_url":"` + authServer.URL + `"}`
+	cfg, ok, err := ParseNewAPIUpstreamAuthConfig(rawKey)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	count, resolved, err := EnsureNewAPIUpstreamAuthTokensForGroups(context.Background(), authServer.URL, rawKey, "", []string{"default"})
+	require.NoError(t, err)
+	require.True(t, resolved)
+	require.Equal(t, 1, count)
+
+	defaultToken, err := common.RedisHGetField(newAPIUpstreamAuthRedisKey(authServer.URL, cfg), newAPIUpstreamAuthRedisField("default", "default"))
+	require.NoError(t, err)
+	require.Equal(t, "sk-default", defaultToken)
+
+	geminiToken, err := common.RedisHGetField(newAPIUpstreamAuthRedisKey(authServer.URL, cfg), newAPIUpstreamAuthRedisField("gemini-official", "gemini-official"))
+	require.NoError(t, err)
+	require.Equal(t, "sk-gemini", geminiToken)
+}
+
+func TestInvalidateNewAPIUpstreamAuthTokenForGroupDeletesRedisSharedCache(t *testing.T) {
+	withMiniredis(t)
+
+	rawKey := `{"type":"newapi_login","username":"alice","password":"secret","token_name":"jwell-upstream","group":"default"}`
+	cfg, ok, err := ParseNewAPIUpstreamAuthConfig(rawKey)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	authBaseURL := "https://auth.redis.example"
+	setNewAPIUpstreamTokenCache(authBaseURL, cfg, "sk-default")
+
+	require.True(t, InvalidateNewAPIUpstreamAuthToken(authBaseURL, rawKey))
+
+	_, err = common.RedisHGetField(newAPIUpstreamAuthRedisKey(authBaseURL, cfg), newAPIUpstreamAuthRedisField(cfg.TokenName, cfg.Group))
+	require.Error(t, err)
+}
+
 func TestResolveUpstreamAuthGroupForModelUsesProviderMetadataOnly(t *testing.T) {
 	settings := dto.ChannelOtherSettings{
 		UpstreamModelGroups: map[string][]string{
@@ -613,6 +734,31 @@ func TestInvalidateNewAPIUpstreamAuthTokenForGroup(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, resolved)
 	require.Equal(t, "sk-vip-2", token)
+}
+
+func TestClearNewAPIUpstreamTokenCache(t *testing.T) {
+	t.Parallel()
+
+	newAPIUpstreamTokenCacheMu.Lock()
+	original := newAPIUpstreamTokenCache
+	newAPIUpstreamTokenCache = map[string]newAPIUpstreamTokenCacheItem{
+		"a": {token: "sk-a"},
+		"b": {token: "sk-b"},
+	}
+	newAPIUpstreamTokenCacheMu.Unlock()
+
+	t.Cleanup(func() {
+		newAPIUpstreamTokenCacheMu.Lock()
+		newAPIUpstreamTokenCache = original
+		newAPIUpstreamTokenCacheMu.Unlock()
+	})
+
+	cleared := ClearNewAPIUpstreamTokenCache()
+	require.Equal(t, 2, cleared)
+
+	newAPIUpstreamTokenCacheMu.Lock()
+	defer newAPIUpstreamTokenCacheMu.Unlock()
+	require.Empty(t, newAPIUpstreamTokenCache)
 }
 
 func TestParseNewAPIUpstreamAuthConfigGoogleProfileUsesEnv(t *testing.T) {
