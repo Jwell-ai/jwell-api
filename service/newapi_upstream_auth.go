@@ -205,16 +205,8 @@ func EnsureNewAPIUpstreamAuthTokensForGroups(ctx context.Context, baseURL string
 			return ensured, true, fmt.Errorf("ensure newapi upstream token group %q failed: %w", groupCfg.Group, err)
 		}
 		if tokenID == 0 {
-			if err = createNewAPIUpstreamToken(ctx, client, authBaseURL, userID, groupCfg); err != nil {
-				return ensured, true, fmt.Errorf("ensure newapi upstream token group %q failed: %w", groupCfg.Group, err)
-			}
-			tokenID, err = findNewAPIUpstreamToken(ctx, client, authBaseURL, userID, groupCfg.TokenName, groupCfg.Group)
-			if err != nil {
-				return ensured, true, fmt.Errorf("ensure newapi upstream token group %q failed: %w", groupCfg.Group, err)
-			}
-			if tokenID == 0 {
-				return ensured, true, fmt.Errorf("newapi upstream token %q group %q was not found after creation", groupCfg.TokenName, groupCfg.Group)
-			}
+			common.SysLog(fmt.Sprintf("newapi upstream token prefetch skipped: token_name=%s group=%s not found", groupCfg.TokenName, groupCfg.Group))
+			continue
 		}
 		token, err := getNewAPIUpstreamTokenKey(ctx, client, authBaseURL, userID, tokenID)
 		if err != nil {
@@ -541,16 +533,10 @@ func fetchNewAPIUpstreamToken(ctx context.Context, baseURL string, cfg NewAPIUps
 		return "", err
 	}
 	if tokenID == 0 {
-		if err = createNewAPIUpstreamToken(ctx, client, baseURL, userID, cfg); err != nil {
-			return "", err
+		if cfg.Group != "" {
+			return "", fmt.Errorf("newapi upstream token %q group %q not found", cfg.TokenName, cfg.Group)
 		}
-		tokenID, err = findNewAPIUpstreamToken(ctx, client, baseURL, userID, cfg.TokenName, cfg.Group)
-		if err != nil {
-			return "", err
-		}
-		if tokenID == 0 {
-			return "", fmt.Errorf("newapi upstream token %q was not found after creation", cfg.TokenName)
-		}
+		return "", fmt.Errorf("newapi upstream token %q not found", cfg.TokenName)
 	}
 	return getNewAPIUpstreamTokenKey(ctx, client, baseURL, userID, tokenID)
 }

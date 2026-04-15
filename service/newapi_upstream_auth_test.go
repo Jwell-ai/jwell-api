@@ -23,11 +23,10 @@ func withGoogleAPICNSetting(t *testing.T, mutate func(*operation_setting.GoogleA
 	})
 }
 
-func TestResolveNewAPIUpstreamAuthTokenCreatesAndCachesToken(t *testing.T) {
+func TestResolveNewAPIUpstreamAuthTokenFetchesExistingTokenAndCachesIt(t *testing.T) {
 	t.Parallel()
 
 	loginCount := 0
-	tokenCreated := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -42,21 +41,13 @@ func TestResolveNewAPIUpstreamAuthTokenCreatesAndCachesToken(t *testing.T) {
 			})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/token/":
 			require.Equal(t, "42", r.Header.Get("New-Api-User"))
-			items := []map[string]any{}
-			if tokenCreated {
-				items = append(items, map[string]any{"id": 7, "name": "jwell-upstream"})
-			}
 			writeNewAPITestJSON(t, w, map[string]any{
 				"success": true,
 				"message": "",
 				"data": map[string]any{
-					"items": items,
+					"items": []map[string]any{{"id": 7, "name": "jwell-upstream"}},
 				},
 			})
-		case r.Method == http.MethodPost && r.URL.Path == "/api/token/":
-			require.Equal(t, "42", r.Header.Get("New-Api-User"))
-			tokenCreated = true
-			writeNewAPITestJSON(t, w, map[string]any{"success": true, "message": "", "data": map[string]any{}})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/token/7/key":
 			require.Equal(t, "42", r.Header.Get("New-Api-User"))
 			writeNewAPITestJSON(t, w, map[string]any{
@@ -83,6 +74,42 @@ func TestResolveNewAPIUpstreamAuthTokenCreatesAndCachesToken(t *testing.T) {
 	require.True(t, resolved)
 	require.Equal(t, "sk-upstream", token)
 	require.Equal(t, 1, loginCount)
+}
+
+func TestResolveNewAPIUpstreamAuthTokenReturnsErrorWhenTokenMissing(t *testing.T) {
+	t.Parallel()
+
+	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/user/login":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"id": 42,
+				},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/token/":
+			writeNewAPITestJSON(t, w, map[string]any{
+				"success": true,
+				"message": "",
+				"data": map[string]any{
+					"items": []map[string]any{},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer authServer.Close()
+
+	rawKey := `{"type":"newapi_login","username":"alice","password":"secret","token_name":"jwell-upstream","group":"default"}`
+	token, resolved, err := ResolveNewAPIUpstreamAuthToken(context.Background(), authServer.URL, rawKey, "")
+	require.Error(t, err)
+	require.True(t, resolved)
+	require.Empty(t, token)
+	require.Contains(t, err.Error(), `newapi upstream token "jwell-upstream" group "default" not found`)
 }
 
 func TestResolveNewAPIUpstreamAuthTokenIgnoresPlainKey(t *testing.T) {
@@ -214,7 +241,6 @@ func TestResolveNewAPIUpstreamAuthTokenForGroupIgnoresNameOnlyTokenForDifferentG
 	t.Parallel()
 
 	tokenListCalls := 0
-	createdPayloadGroup := ""
 	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -239,19 +265,6 @@ func TestResolveNewAPIUpstreamAuthTokenForGroupIgnoresNameOnlyTokenForDifferentG
 					"items": items,
 				},
 			})
-		case r.Method == http.MethodPost && r.URL.Path == "/api/token/":
-			var payload map[string]any
-			require.NoError(t, common.DecodeJson(r.Body, &payload))
-			createdPayloadGroup = payload["group"].(string)
-			writeNewAPITestJSON(t, w, map[string]any{"success": true, "message": "", "data": map[string]any{}})
-		case r.Method == http.MethodPost && r.URL.Path == "/api/token/8/key":
-			writeNewAPITestJSON(t, w, map[string]any{
-				"success": true,
-				"message": "",
-				"data": map[string]any{
-					"key": "sk-vip",
-				},
-			})
 		default:
 			http.NotFound(w, r)
 		}
@@ -260,10 +273,10 @@ func TestResolveNewAPIUpstreamAuthTokenForGroupIgnoresNameOnlyTokenForDifferentG
 
 	rawKey := `{"type":"newapi_login","username":"alice","password":"secret","token_name":"jwell-upstream","group":"default"}`
 	token, resolved, err := ResolveNewAPIUpstreamAuthTokenForGroup(context.Background(), authServer.URL, rawKey, "", "vip")
-	require.NoError(t, err)
+	require.Error(t, err)
 	require.True(t, resolved)
-	require.Equal(t, "sk-vip", token)
-	require.Equal(t, "vip", createdPayloadGroup)
+	require.Empty(t, token)
+	require.Contains(t, err.Error(), `newapi upstream token "jwell-upstream" group "vip" not found`)
 }
 
 func TestResolveGoogleAPICNUpstreamAuthTokenUsesGroupAsTokenName(t *testing.T) {
@@ -317,16 +330,14 @@ func TestResolveGoogleAPICNUpstreamAuthTokenUsesGroupAsTokenName(t *testing.T) {
 	require.Empty(t, createdPayload)
 }
 
-func TestEnsureNewAPIUpstreamAuthTokensForGroupsCreatesAndCachesGroupTokens(t *testing.T) {
+func TestEnsureNewAPIUpstreamAuthTokensForGroupsSkipsMissingGroups(t *testing.T) {
 	loginCount := 0
-	nextTokenID := 10
 	tokenIDByGroup := map[string]int{
 		"default": 7,
 	}
 	groupByTokenID := map[int]string{
 		7: "default",
 	}
-	createdGroups := make([]string, 0)
 	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -351,15 +362,6 @@ func TestEnsureNewAPIUpstreamAuthTokensForGroupsCreatesAndCachesGroupTokens(t *t
 					"items": items,
 				},
 			})
-		case r.Method == http.MethodPost && r.URL.Path == "/api/token/":
-			var payload map[string]any
-			require.NoError(t, common.DecodeJson(r.Body, &payload))
-			group := payload["group"].(string)
-			createdGroups = append(createdGroups, group)
-			tokenIDByGroup[group] = nextTokenID
-			groupByTokenID[nextTokenID] = group
-			nextTokenID++
-			writeNewAPITestJSON(t, w, map[string]any{"success": true, "message": "", "data": map[string]any{}})
 		default:
 			var tokenID int
 			if r.Method == http.MethodPost {
@@ -384,15 +386,14 @@ func TestEnsureNewAPIUpstreamAuthTokensForGroupsCreatesAndCachesGroupTokens(t *t
 	count, resolved, err := EnsureNewAPIUpstreamAuthTokensForGroups(context.Background(), authServer.URL, rawKey, "", []string{" default ", "vip", "vip", " "})
 	require.NoError(t, err)
 	require.True(t, resolved)
-	require.Equal(t, 2, count)
-	require.Equal(t, []string{"vip"}, createdGroups)
+	require.Equal(t, 1, count)
 	require.Equal(t, 1, loginCount)
 
 	token, resolved, err := ResolveNewAPIUpstreamAuthTokenForGroup(context.Background(), authServer.URL, rawKey, "", "vip")
-	require.NoError(t, err)
+	require.Error(t, err)
 	require.True(t, resolved)
-	require.Equal(t, "sk-vip", token)
-	require.Equal(t, 1, loginCount)
+	require.Empty(t, token)
+	require.Equal(t, 2, loginCount)
 }
 
 func TestResolveUpstreamAuthGroupForModelUsesProviderMetadataOnly(t *testing.T) {
