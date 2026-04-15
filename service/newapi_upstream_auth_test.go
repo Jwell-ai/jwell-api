@@ -517,7 +517,7 @@ func TestInvalidateNewAPIUpstreamAuthTokenForGroupDeletesRedisSharedCache(t *tes
 	require.Error(t, err)
 }
 
-func TestResolveUpstreamAuthGroupForModelUsesProviderMetadataOnly(t *testing.T) {
+func TestResolveUpstreamAuthGroupForModelPrefersPlatformGroupMapping(t *testing.T) {
 	settings := dto.ChannelOtherSettings{
 		UpstreamModelGroups: map[string][]string{
 			"gemini-2.5-pro": {"default"},
@@ -531,11 +531,12 @@ func TestResolveUpstreamAuthGroupForModelUsesProviderMetadataOnly(t *testing.T) 
 		},
 	}
 
-	require.Equal(t, "default", ResolveUpstreamAuthGroupForModel(settings, "gemini-2.5-pro", "vip"))
+	require.Equal(t, "vip", ResolveUpstreamAuthGroupForModel(settings, "gemini-2.5-pro", "vip"))
 	require.Equal(t, "vip", ResolveUpstreamAuthGroupForModel(settings, "claude-sonnet", "svip"))
-	require.Equal(t, "vip", ResolveUpstreamAuthGroupForModel(settings, "claude-sonnet", "staff"))
+	require.Equal(t, "not-model-group", ResolveUpstreamAuthGroupForModel(settings, "claude-sonnet", "staff"))
 	require.Equal(t, "vip", ResolveUpstreamAuthGroupForModel(settings, "gpt-4o", "vip"))
 	require.Empty(t, ResolveUpstreamAuthGroupForModel(settings, "gpt-4o", "unknown"))
+	require.Equal(t, "default", ResolveUpstreamAuthGroupForModel(settings, "gemini-2.5-pro", "unknown"))
 }
 
 func TestResolveNewAPIUpstreamAuthTokenSupportsGetKeyFallback(t *testing.T) {

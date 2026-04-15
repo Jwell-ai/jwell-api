@@ -224,35 +224,47 @@ func ResolveUpstreamAuthGroupForModel(settings dto.ChannelOtherSettings, modelNa
 	if modelName != "" && len(settings.UpstreamModelGroups) > 0 {
 		modelGroups = settings.UpstreamModelGroups[modelName]
 	}
+	mappedGroup := ""
 
 	if platformGroup != "" && len(settings.UpstreamGroupMapping) > 0 {
-		if upstreamGroup := strings.TrimSpace(settings.UpstreamGroupMapping[platformGroup]); upstreamGroup != "" && upstreamGroupAllowedForModel(upstreamGroup, modelGroups) {
+		if upstreamGroup := strings.TrimSpace(settings.UpstreamGroupMapping[platformGroup]); upstreamGroup != "" {
+			mappedGroup = upstreamGroup
+			logNewAPIUpstreamAuthGroupDecision(modelName, platformGroup, mappedGroup, modelGroups, upstreamGroup, "platform_group_mapping")
 			return upstreamGroup
 		}
 	}
 
 	for _, group := range modelGroups {
 		if group = strings.TrimSpace(group); group != "" {
+			logNewAPIUpstreamAuthGroupDecision(modelName, platformGroup, mappedGroup, modelGroups, group, "model_metadata_fallback")
 			return group
 		}
 	}
+	logNewAPIUpstreamAuthGroupDecision(modelName, platformGroup, mappedGroup, modelGroups, "", "empty")
 	return ""
 }
 
-func upstreamGroupAllowedForModel(group string, modelGroups []string) bool {
-	group = strings.TrimSpace(group)
-	if group == "" {
-		return false
+func logNewAPIUpstreamAuthGroupDecision(modelName string, platformGroup string, mappedGroup string, modelGroups []string, selectedGroup string, reason string) {
+	if !newAPIUpstreamAuthDebugEnabled() {
+		return
 	}
-	if len(modelGroups) == 0 {
-		return true
-	}
-	for _, modelGroup := range modelGroups {
-		if strings.TrimSpace(modelGroup) == group {
-			return true
+	normalizedModelGroups := make([]string, 0, len(modelGroups))
+	for _, group := range modelGroups {
+		group = strings.TrimSpace(group)
+		if group == "" {
+			continue
 		}
+		normalizedModelGroups = append(normalizedModelGroups, group)
 	}
-	return false
+	common.SysLog(fmt.Sprintf(
+		"newapi upstream auth group debug: model=%s platform_group=%s mapped_group=%s model_groups=%v selected_group=%s reason=%s",
+		modelName,
+		platformGroup,
+		mappedGroup,
+		normalizedModelGroups,
+		selectedGroup,
+		reason,
+	))
 }
 
 func resolveNewAPIUpstreamAuthToken(ctx context.Context, baseURL string, rawKey string, proxy string, group string) (string, bool, error) {
