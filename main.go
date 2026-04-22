@@ -192,11 +192,15 @@ func main() {
 	if port == "" {
 		port = strconv.Itoa(*common.Port)
 	}
+	host := os.Getenv("HOST")
+	if host == "" {
+		host = ""
+	}
 
 	// Log startup success message
 	common.LogStartupSuccess(startTime, port)
 
-	err = server.Run(":" + port)
+	err = server.Run(host + ":" + port)
 	if err != nil {
 		common.FatalLog("failed to start HTTP server: " + err.Error())
 	}
