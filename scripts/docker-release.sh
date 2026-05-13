@@ -40,6 +40,13 @@ echo "Version: ${current_version} -> ${new_version}"
 
 cd "$(dirname "$0")/.."
 
+if [ ! -d "web/dist" ] || [ -z "$(ls -A web/dist 2>/dev/null)" ]; then
+    echo "Building frontend (web/dist not found)..."
+    cd web && bun install && \
+        DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION="${new_version}" bun run build
+    cd ..
+fi
+
 echo "Building binary..."
 GOEXPERIMENT=greenteagc CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build -tags embed_frontend \
