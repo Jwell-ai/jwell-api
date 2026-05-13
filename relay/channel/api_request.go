@@ -308,6 +308,9 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	if err != nil {
 		return nil, fmt.Errorf("get request url failed: %w", err)
 	}
+	if !strings.HasPrefix(fullRequestURL, "http://") && !strings.HasPrefix(fullRequestURL, "https://") && !strings.HasPrefix(fullRequestURL, "ws://") && !strings.HasPrefix(fullRequestURL, "wss://") {
+		return nil, fmt.Errorf("channel #%d has no base URL configured (resolved url: %q); set the channel base_url in the admin panel", info.ChannelId, fullRequestURL)
+	}
 	if common2.DebugEnabled {
 		println("fullRequestURL:", fullRequestURL)
 	}
@@ -338,6 +341,9 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
 		return nil, fmt.Errorf("get request url failed: %w", err)
+	}
+	if !strings.HasPrefix(fullRequestURL, "http://") && !strings.HasPrefix(fullRequestURL, "https://") {
+		return nil, fmt.Errorf("channel #%d has no base URL configured (resolved url: %q); set the channel base_url in the admin panel", info.ChannelId, fullRequestURL)
 	}
 	if common2.DebugEnabled {
 		println("fullRequestURL:", fullRequestURL)
