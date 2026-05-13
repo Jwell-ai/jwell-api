@@ -7,6 +7,5 @@ services:
       - "9527:3000"
     env_file: .env
     volumes:
-      - ./data:/data
       - ./logs:/app/logs
     command: ["--log-dir", "/app/logs"]
