@@ -421,11 +421,11 @@ func (channel *Channel) GetWeight() int {
 }
 
 func (channel *Channel) GetBaseURL() string {
-	if channel.BaseURL == nil {
-		return ""
+	url := ""
+	if channel.BaseURL != nil {
+		url = *channel.BaseURL
 	}
-	url := *channel.BaseURL
-	if url == "" {
+	if url == "" && channel.Type >= 0 && channel.Type < len(constant.ChannelBaseURLs) {
 		url = constant.ChannelBaseURLs[channel.Type]
 	}
 	return url
