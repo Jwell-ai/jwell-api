@@ -13,7 +13,7 @@ cd "$(dirname "$0")"
 ENV=${1:-dev}
 PEM_KEY="${HOME}/Documents/pem/ssh2_access_key.pem"
 SERVER_USER="ubuntu"
-SERVER_HOST="ec2-35-91-107-165.us-west-2.compute.amazonaws.com"
+SERVER_HOST="ec2-34-219-122-6.us-west-2.compute.amazonaws.com"
 REMOTE_PATH="/var/www/jwell-api/"
 
 # Colors for output

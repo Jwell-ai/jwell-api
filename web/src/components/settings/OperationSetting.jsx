@@ -88,7 +88,6 @@ const OperationSetting = () => {
     'google_api_cn.password': '',
     'google_api_cn.token_name': 'jwell-api-upstream',
     'google_api_cn.group': 'default',
-    'google_api_cn.group_mapping': '',
     'google_api_cn.auto_bootstrap_enabled': true,
     'google_api_cn.auth_base_url': 'https://google-api.cn',
     'google_api_cn.pricing_url': 'https://google-api.cn/api/pricing',

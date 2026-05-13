@@ -29,21 +29,12 @@ import {
 } from '../../../helpers';
 import { useTranslation } from 'react-i18next';
 
-const googleAPICNGroupMappingExample = JSON.stringify(
-  {
-    default: 'default',
-    vip: 'vip',
-  },
-  null,
-  2,
-);
 
 const defaultInputs = {
   'google_api_cn.username': '',
   'google_api_cn.password': '',
   'google_api_cn.token_name': 'jwell-api-upstream',
   'google_api_cn.group': 'default',
-  'google_api_cn.group_mapping': '',
   'google_api_cn.auto_bootstrap_enabled': true,
   'google_api_cn.auth_base_url': 'https://google-api.cn',
   'google_api_cn.pricing_url': 'https://google-api.cn/api/pricing',
@@ -85,21 +76,6 @@ export default function SettingsGoogleAPICNUpstream(props) {
   }
 
   async function onSubmit() {
-    const groupMapping = String(inputs['google_api_cn.group_mapping'] || '').trim();
-    if (groupMapping && !verifyJSON(groupMapping)) {
-      return showError(t('google-api.cn 分组映射必须是合法 JSON 对象'));
-    }
-    if (groupMapping) {
-      try {
-        const parsed = JSON.parse(groupMapping);
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-          return showError(t('google-api.cn 分组映射必须是合法 JSON 对象'));
-        }
-      } catch (error) {
-        return showError(t('google-api.cn 分组映射必须是合法 JSON 对象'));
-      }
-    }
-
     const updateArray = compareObjects(inputs, inputsRow).filter(
       (item) =>
         item.key !== 'google_api_cn.password' ||
@@ -315,18 +291,6 @@ export default function SettingsGoogleAPICNUpstream(props) {
               </Col>
             </Row>
             <Row gutter={16}>
-              <Col xs={24} sm={12}>
-                <Form.TextArea
-                  field='google_api_cn.group_mapping'
-                  label={t('本平台分组 -> 上游令牌分组映射')}
-                  placeholder={googleAPICNGroupMappingExample}
-                  autosize={{ minRows: 5, maxRows: 10 }}
-                  onChange={handleFieldChange('google_api_cn.group_mapping')}
-                  extraText={t(
-                    'JSON 对象。键为本平台分组，值为 google-api.cn 上游令牌分组；仅影响上游 key 选择。',
-                  )}
-                />
-              </Col>
               <Col xs={24} sm={12}>
                 <Form.TextArea
                   field='google_api_cn.bootstrap_models'

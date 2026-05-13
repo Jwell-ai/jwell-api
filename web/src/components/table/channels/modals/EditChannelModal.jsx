@@ -942,7 +942,6 @@ const EditChannelModal = (props) => {
         data.upstream_model_update_last_check_time = 0;
         data.upstream_model_update_last_detected_models = [];
         data.upstream_model_update_ignored_models = '';
-        data.upstream_group_mapping = '';
       }
 
       if (

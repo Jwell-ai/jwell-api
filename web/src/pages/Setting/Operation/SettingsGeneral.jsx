@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useEffect, useState, useRef, useMemo } from 'react';
+import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import {
   Banner,
   Button,
@@ -44,6 +44,25 @@ export default function GeneralSettings(props) {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
   const [showQuotaWarning, setShowQuotaWarning] = useState(false);
+  const [syncingRate, setSyncingRate] = useState(false);
+
+  const syncExchangeRate = useCallback(async () => {
+    setSyncingRate(true);
+    try {
+      const res = await API.post('/api/option/sync_exchange_rate');
+      if (res.data.success) {
+        const rate = res.data.rate.toFixed(4);
+        handleFieldChange('USDExchangeRate')(rate);
+        showSuccess(t('汇率已同步：1 USD = {{rate}} CNY', { rate }));
+      } else {
+        showError(res.data.message || t('汇率同步失败'));
+      }
+    } catch (e) {
+      showError(t('汇率同步失败'));
+    } finally {
+      setSyncingRate(false);
+    }
+  }, [t]);
   const [inputs, setInputs] = useState({
     TopUpLink: '',
     'general_setting.docs_link': '',
@@ -307,6 +326,17 @@ export default function GeneralSettings(props) {
                       value={combinedRate}
                       onChange={onCombinedRateChange}
                     />
+                    {quotaDisplayType === 'CNY' && (
+                      <Button
+                        size='small'
+                        theme='borderless'
+                        loading={syncingRate}
+                        onClick={syncExchangeRate}
+                        style={{ marginTop: 4, padding: 0 }}
+                      >
+                        {t('从市场同步汇率')}
+                      </Button>
+                    )}
                     <Text
                       type='tertiary'
                       size='small'
