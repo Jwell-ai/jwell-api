@@ -70,6 +70,11 @@ func StartGoogleAPICNBootstrapTask() {
 		return
 	}
 
+	// Synchronously patch base_url for any matching channel that has it empty or
+	// pointing at auth_base_url. This prevents "no base URL configured" errors
+	// during the window while the full async bootstrap is still running.
+	fastPatchGoogleAPICNChannelBaseURL(cfg)
+
 	go func() {
 		timeoutSeconds := upstreamSetting.BootstrapTimeoutSeconds
 		if timeoutSeconds <= 0 {
@@ -82,6 +87,31 @@ func StartGoogleAPICNBootstrapTask() {
 			common.SysError("google-api.cn bootstrap failed: " + err.Error())
 		}
 	}()
+}
+
+// fastPatchGoogleAPICNChannelBaseURL synchronously ensures any channel identified
+// by cfg.Tag has base_url set to cfg.BaseURL if it is currently empty or still
+// pointing at the auth base URL. Called before the async bootstrap goroutine so
+// relay requests don't fail with "no base URL configured" at startup.
+func fastPatchGoogleAPICNChannelBaseURL(cfg googleAPICNBootstrapConfig) {
+	if cfg.BaseURL == "" || cfg.Tag == "" {
+		return
+	}
+	var channel model.Channel
+	if err := model.DB.Where("tag = ?", cfg.Tag).Order("id asc").First(&channel).Error; err != nil {
+		return // channel not yet created; the async bootstrap will create it
+	}
+	existing := strings.TrimRight(strings.TrimSpace(channel.GetBaseURL()), "/")
+	authBase := strings.TrimRight(strings.TrimSpace(cfg.AuthBaseURL), "/")
+	if existing != "" && existing != authBase {
+		return // already has the right base URL
+	}
+	if err := model.DB.Model(&channel).Update("base_url", cfg.BaseURL).Error; err != nil {
+		common.SysError(fmt.Sprintf("google-api.cn: fast base_url patch failed: %s", err.Error()))
+		return
+	}
+	common.SysLog(fmt.Sprintf("google-api.cn: patched channel #%d base_url to %s", channel.Id, cfg.BaseURL))
+	refreshChannelRuntimeCache()
 }
 
 func ScheduleGoogleAPICNBootstrapTask() {

@@ -157,7 +157,10 @@ func Distribute() func(c *gin.Context) {
 			}
 		}
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
-		SetupContextForSelectedChannel(c, channel, modelRequest.Model)
+		if newAPIError := SetupContextForSelectedChannel(c, channel, modelRequest.Model); newAPIError != nil {
+			abortWithOpenAiMessage(c, newAPIError.StatusCode, newAPIError.Error(), newAPIError.GetErrorCode())
+			return
+		}
 		c.Next()
 		if channel != nil && c.Writer != nil && c.Writer.Status() < http.StatusBadRequest {
 			service.RecordChannelAffinity(c, channel.Id)
@@ -376,6 +379,8 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	upstreamAuthGroup := service.ResolveUpstreamAuthGroupForModel(channel.GetOtherSettings(), modelName, getSelectedChannelUsingGroup(c))
 	common.SetContextKey(c, constant.ContextKeyChannelOriginalKey, originalKey)
 	common.SetContextKey(c, constant.ContextKeyChannelUpstreamAuthGroup, upstreamAuthGroup)
+	// Set base URL before token resolution so it is always in context even on early return.
+	common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, resolveChannelBaseURL(channel, originalKey))
 	if resolvedKey, resolved, err := service.ResolveNewAPIUpstreamAuthTokenForGroup(c.Request.Context(), channel.GetBaseURL(), key, channel.GetSetting().Proxy, upstreamAuthGroup); resolved {
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
@@ -391,7 +396,6 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	}
 	// c.Request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", key))
 	common.SetContextKey(c, constant.ContextKeyChannelKey, key)
-	common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, resolveChannelBaseURL(channel, originalKey))
 
 	common.SetContextKey(c, constant.ContextKeySystemPromptOverride, false)
 
