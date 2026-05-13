@@ -8,3 +8,11 @@ docs
 .eslintcache
 .gocache
 /web/node_modules
+web/
+*.go
+go.mod
+go.sum
+scripts/
+.env
+*.log
+*.pid
