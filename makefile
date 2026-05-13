@@ -22,7 +22,7 @@ build-backend-embedded:
 	@echo "Building backend with embedded frontend..."
 	@cd $(BACKEND_DIR) && go build -tags embed_frontend -ldflags "-s -w -X 'github.com/Jwell-ai/jwell-api/common.Version=$$(cat VERSION)'" -o $(OUTPUT)
 
-docker-build: build-frontend
+docker-build:
 	@GOEXPERIMENT=greenteagc CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 		go build -tags embed_frontend \
 		-ldflags "-s -w -extldflags '-static' -X 'github.com/Jwell-ai/jwell-api/common.Version=$(VERSION)'" \
