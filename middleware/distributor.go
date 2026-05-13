@@ -16,6 +16,7 @@ import (
 	"github.com/Jwell-ai/jwell-api/model"
 	relayconstant "github.com/Jwell-ai/jwell-api/relay/constant"
 	"github.com/Jwell-ai/jwell-api/service"
+	"github.com/Jwell-ai/jwell-api/setting/operation_setting"
 	"github.com/Jwell-ai/jwell-api/setting/ratio_setting"
 	"github.com/Jwell-ai/jwell-api/types"
 
@@ -416,14 +417,21 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	return nil
 }
 
-// resolveChannelBaseURL returns the channel's configured base URL, falling back
-// to auth_base_url from a newapi_login key when the channel's own base_url is empty.
+// resolveChannelBaseURL returns the channel's configured base URL, with two fallbacks
+// when the channel's own base_url is empty:
+//  1. auth_base_url from a newapi_login key (populated even when credentials are incomplete)
+//  2. api_base_url from the google_api_cn operation setting
 func resolveChannelBaseURL(channel *model.Channel, rawKey string) string {
 	if url := channel.GetBaseURL(); url != "" {
 		return url
 	}
-	if cfg, ok, err := service.ParseNewAPIUpstreamAuthConfig(rawKey); ok && err == nil && cfg.AuthBaseURL != "" {
+	// cfg.AuthBaseURL is set by applyNewAPIUpstreamAuthEnv before credential validation,
+	// so ignore the error and only require ok + non-empty AuthBaseURL.
+	if cfg, ok, _ := service.ParseNewAPIUpstreamAuthConfig(rawKey); ok && cfg.AuthBaseURL != "" {
 		return cfg.AuthBaseURL
+	}
+	if url := strings.TrimRight(strings.TrimSpace(operation_setting.GetGoogleAPICNSetting().APIBaseURL), "/"); url != "" {
+		return url
 	}
 	return ""
 }
