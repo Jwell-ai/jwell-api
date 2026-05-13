@@ -23,12 +23,8 @@ build-backend-embedded:
 	@cd $(BACKEND_DIR) && go build -tags embed_frontend -ldflags "-s -w -X 'github.com/Jwell-ai/jwell-api/common.Version=$$(cat VERSION)'" -o $(OUTPUT)
 
 docker-build:
-	@if [ ! -d "web/dist" ] || [ -z "$$(ls -A web/dist 2>/dev/null)" ]; then \
-		echo "Building frontend (web/dist not found)..."; \
-		cd web && bun install && DISABLE_ESLINT_PLUGIN='true' bun run build; \
-	fi
 	@GOEXPERIMENT=greenteagc CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-		go build -tags embed_frontend \
+		go build \
 		-ldflags "-s -w -extldflags '-static' -X 'github.com/Jwell-ai/jwell-api/common.Version=$(VERSION)'" \
 		-o $(OUTPUT)
 	@sudo -E docker build --platform linux/amd64 \
