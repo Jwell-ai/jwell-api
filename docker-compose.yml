@@ -3,7 +3,8 @@ services:
     image: registry.digitalocean.com/alphart/alphart:jwell-api-latest
     pull_policy: always
     restart: unless-stopped
-    network_mode: host
+    ports:
+      - "9527:3000"
     env_file: .env
     volumes:
       - ./data:/data
