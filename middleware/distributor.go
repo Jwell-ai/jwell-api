@@ -421,21 +421,28 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	return nil
 }
 
-// resolveChannelBaseURL returns the channel's configured base URL, with two fallbacks
+// resolveChannelBaseURL returns the channel's configured base URL, falling back
 // when the channel's own base_url is empty:
 //  1. auth_base_url from a newapi_login key (populated even when credentials are incomplete)
-//  2. api_base_url from the google_api_cn operation setting
+//  2. api_base_url from the google_api_cn operation setting — only for google_api_cn profile keys
 func resolveChannelBaseURL(channel *model.Channel, rawKey string) string {
 	if url := channel.GetBaseURL(); url != "" {
 		return url
 	}
 	// cfg.AuthBaseURL is set by applyNewAPIUpstreamAuthEnv before credential validation,
 	// so ignore the error and only require ok + non-empty AuthBaseURL.
-	if cfg, ok, _ := service.ParseNewAPIUpstreamAuthConfig(rawKey); ok && cfg.AuthBaseURL != "" {
+	cfg, ok, _ := service.ParseNewAPIUpstreamAuthConfig(rawKey)
+	if !ok {
+		return ""
+	}
+	if cfg.AuthBaseURL != "" {
 		return cfg.AuthBaseURL
 	}
-	if url := strings.TrimRight(strings.TrimSpace(operation_setting.GetGoogleAPICNSetting().APIBaseURL), "/"); url != "" {
-		return url
+	// For google_api_cn profile only: fall back to the api_base_url operation setting.
+	if service.IsGoogleAPICNUpstreamAuthProfile(cfg.Profile) {
+		if url := strings.TrimRight(strings.TrimSpace(operation_setting.GetGoogleAPICNSetting().APIBaseURL), "/"); url != "" {
+			return url
+		}
 	}
 	return ""
 }

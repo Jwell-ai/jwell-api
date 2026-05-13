@@ -53,7 +53,8 @@ type googleAPICNModelInfo struct {
 	Name            string
 	Groups          []string
 	ModelRatio      float64 // 0 means not extracted from pricing data
-	CompletionRatio float64 // 0 means not extracted from pricing data
+	CompletionRatio float64 // 0 means not extracted
+	ModelPrice      float64 // > 0 means fixed per-request price (not token-based)
 }
 
 // StartGoogleAPICNBootstrapTask creates or updates the shared google-api.cn
@@ -104,10 +105,15 @@ func fastPatchGoogleAPICNChannelBaseURL(cfg googleAPICNBootstrapConfig) {
 	if err := model.DB.Where("tag = ?", cfg.Tag).Order("id asc").First(&channel).Error; err != nil {
 		return // channel not yet created; the async bootstrap will create it
 	}
-	existing := strings.TrimRight(strings.TrimSpace(channel.GetBaseURL()), "/")
+	// Use the raw DB field, not GetBaseURL(), which now falls back to the type
+	// default and would make the check always true for type-1 channels.
+	rawURL := ""
+	if channel.BaseURL != nil {
+		rawURL = strings.TrimRight(strings.TrimSpace(*channel.BaseURL), "/")
+	}
 	authBase := strings.TrimRight(strings.TrimSpace(cfg.AuthBaseURL), "/")
-	if existing != "" && existing != authBase {
-		return // already has the right base URL
+	if rawURL != "" && rawURL != authBase {
+		return // already has a non-default base URL
 	}
 	if err := model.DB.Model(&channel).Update("base_url", cfg.BaseURL).Error; err != nil {
 		common.SysError(fmt.Sprintf("google-api.cn: fast base_url patch failed: %s", err.Error()))
@@ -618,14 +624,24 @@ func googleAPICNNormalizeGroups(groups []string, fallbackGroup string) []string 
 	return normalized
 }
 
+// ensureGoogleAPICNModelRatios syncs model_ratio, completion_ratio and
+// model_price from upstream pricing data. fullSync=true also removes stale
+// entries that are no longer in the upstream model list; fullSync=false only
+// adds/updates (safe for partial model lists from channel update paths).
 func ensureGoogleAPICNModelRatios(modelInfos []googleAPICNModelInfo, cfg googleAPICNBootstrapConfig) error {
+	return syncGoogleAPICNPricing(modelInfos, cfg, true)
+}
+
+func ensureGoogleAPICNModelRatiosPartial(modelInfos []googleAPICNModelInfo, cfg googleAPICNBootstrapConfig) error {
+	return syncGoogleAPICNPricing(modelInfos, cfg, false)
+}
+
+func syncGoogleAPICNPricing(modelInfos []googleAPICNModelInfo, cfg googleAPICNBootstrapConfig, fullSync bool) error {
 	if !cfg.AutoRegisterModelRatio || len(modelInfos) == 0 {
 		return nil
 	}
-	existingRatios := ratio_setting.GetModelRatioCopy()
-	existingPrices := ratio_setting.GetModelPriceCopy()
 
-	// Build set of upstream model keys for stale-entry detection.
+	// Build upstream key set (used for stale removal in full-sync mode).
 	upstreamKeys := make(map[string]struct{}, len(modelInfos))
 	for _, info := range modelInfos {
 		if name := strings.TrimSpace(info.Name); name != "" {
@@ -633,30 +649,101 @@ func ensureGoogleAPICNModelRatios(modelInfos []googleAPICNModelInfo, cfg googleA
 		}
 	}
 
-	modelRatios, added := mergeGoogleAPICNModelRatios(existingRatios, existingPrices, modelInfos, cfg.DefaultModelRatio)
-
-	// Remove ratios that carry the default placeholder value (37.5) and are no
-	// longer in the upstream model list — these are stale auto-registered entries.
-	removed := 0
-	for key, ratio := range modelRatios {
-		if _, inUpstream := upstreamKeys[key]; !inUpstream && ratio == googleAPICNDefaultModelRatio {
-			delete(modelRatios, key)
-			removed++
+	// --- ModelRatio ---
+	modelRatios, ratioAdded := mergeGoogleAPICNModelRatios(
+		ratio_setting.GetModelRatioCopy(),
+		ratio_setting.GetModelPriceCopy(),
+		modelInfos,
+		cfg.DefaultModelRatio,
+	)
+	ratioRemoved := 0
+	if fullSync {
+		for key, ratio := range modelRatios {
+			if _, ok := upstreamKeys[key]; !ok && ratio == googleAPICNDefaultModelRatio {
+				delete(modelRatios, key)
+				ratioRemoved++
+			}
 		}
 	}
 
-	if added == 0 && removed == 0 {
+	// --- CompletionRatio ---
+	completionRatios := ratio_setting.GetCompletionRatioCopy()
+	crAdded, crRemoved := 0, 0
+	for _, info := range modelInfos {
+		if info.CompletionRatio <= 0 {
+			continue
+		}
+		key := ratio_setting.FormatMatchingModelName(strings.TrimSpace(info.Name))
+		if _, exists := completionRatios[key]; !exists {
+			crAdded++
+		}
+		completionRatios[key] = info.CompletionRatio
+	}
+	if fullSync {
+		for key := range completionRatios {
+			if _, ok := upstreamKeys[key]; !ok {
+				delete(completionRatios, key)
+				crRemoved++
+			}
+		}
+	}
+
+	// --- ModelPrice ---
+	modelPrices := ratio_setting.GetModelPriceCopy()
+	priceAdded, priceRemoved := 0, 0
+	ratioDeletedForPrice := 0
+	for _, info := range modelInfos {
+		if info.ModelPrice <= 0 {
+			continue
+		}
+		key := ratio_setting.FormatMatchingModelName(strings.TrimSpace(info.Name))
+		if _, exists := modelPrices[key]; !exists {
+			priceAdded++
+		}
+		modelPrices[key] = info.ModelPrice
+		// Model is price-based — remove from ratio map to avoid double-billing.
+		if _, had := modelRatios[key]; had {
+			delete(modelRatios, key)
+			ratioDeletedForPrice++
+		}
+	}
+	if fullSync {
+		for key := range modelPrices {
+			if _, ok := upstreamKeys[key]; !ok {
+				delete(modelPrices, key)
+				priceRemoved++
+			}
+		}
+	}
+
+	ratioChanged := ratioAdded+ratioRemoved+ratioDeletedForPrice > 0
+	crChanged := crAdded+crRemoved > 0
+	priceChanged := priceAdded+priceRemoved > 0
+
+	if !ratioChanged && !crChanged && !priceChanged {
 		return nil
 	}
-	data, err := common.Marshal(modelRatios)
-	if err != nil {
-		return err
+
+	if ratioChanged {
+		if data, err := common.Marshal(modelRatios); err == nil {
+			_ = model.UpdateOption("ModelRatio", string(data))
+		}
 	}
-	if err = model.UpdateOption("ModelRatio", string(data)); err != nil {
-		return err
+	if crChanged {
+		if data, err := common.Marshal(completionRatios); err == nil {
+			_ = model.UpdateOption("CompletionRatio", string(data))
+		}
+	}
+	if priceChanged {
+		if data, err := common.Marshal(modelPrices); err == nil {
+			_ = model.UpdateOption("ModelPrice", string(data))
+		}
 	}
 	ratio_setting.InvalidateExposedDataCache()
-	common.SysLog(fmt.Sprintf("google-api.cn model ratios: added=%d removed=%d ratio=%.4f", added, removed, cfg.DefaultModelRatio))
+	common.SysLog(fmt.Sprintf(
+		"google-api.cn pricing synced: ratio +%d/-%d/%d  completion +%d/-%d  price +%d/-%d",
+		ratioAdded, ratioRemoved, ratioDeletedForPrice, crAdded, crRemoved, priceAdded, priceRemoved,
+	))
 	return nil
 }
 
@@ -665,7 +752,10 @@ func ensureGoogleAPICNModelRatiosForChannel(channel *model.Channel, models []str
 	if !ok || !googleAPICNConfigMatchesChannel(channel, cfg) {
 		return nil
 	}
-	return ensureGoogleAPICNModelRatios(googleAPICNModelInfosFromNames(models, cfg.UpstreamTokenGroup), cfg)
+	// Use partial sync: this call has only the newly-discovered models, not the
+	// full upstream list, so stale-entry removal would incorrectly delete ratios
+	// for models not in this incremental update.
+	return ensureGoogleAPICNModelRatiosPartial(googleAPICNModelInfosFromNames(models, cfg.UpstreamTokenGroup), cfg)
 }
 
 func ensureGoogleAPICNModelMetas(models []string) error {
@@ -1090,7 +1180,7 @@ func collectGoogleAPICNPricingModelInfos(value any, inheritedGroups []string) []
 				groups = inheritedGroups
 			}
 			info := googleAPICNModelInfo{Name: modelName, Groups: groups}
-			info.ModelRatio, info.CompletionRatio = googleAPICNPricingModelRatioFromMap(typed)
+			info.ModelRatio, info.CompletionRatio, info.ModelPrice = googleAPICNPricingModelRatioFromMap(typed)
 			return []googleAPICNModelInfo{info}
 		}
 		models := make([]googleAPICNModelInfo, 0)
@@ -1110,9 +1200,9 @@ func collectGoogleAPICNPricingModelInfos(value any, inheritedGroups []string) []
 	}
 }
 
-// googleAPICNPricingModelRatioFromMap extracts model_ratio and completion_ratio
-// from a pricing entry. Returns (0, 0) when no ratio data is present.
-func googleAPICNPricingModelRatioFromMap(item map[string]any) (modelRatio float64, completionRatio float64) {
+// googleAPICNPricingModelRatioFromMap extracts model_ratio, completion_ratio and
+// model_price from a pricing entry. Returns zeroes when fields are absent.
+func googleAPICNPricingModelRatioFromMap(item map[string]any) (modelRatio, completionRatio, modelPrice float64) {
 	for _, key := range []string{"model_ratio", "ratio", "input_ratio"} {
 		if v, ok := item[key].(float64); ok && v > 0 {
 			modelRatio = v
@@ -1122,6 +1212,12 @@ func googleAPICNPricingModelRatioFromMap(item map[string]any) (modelRatio float6
 	for _, key := range []string{"completion_ratio", "output_ratio"} {
 		if v, ok := item[key].(float64); ok && v > 0 {
 			completionRatio = v
+			break
+		}
+	}
+	for _, key := range []string{"model_price", "price", "fixed_price"} {
+		if v, ok := item[key].(float64); ok && v > 0 {
+			modelPrice = v
 			break
 		}
 	}

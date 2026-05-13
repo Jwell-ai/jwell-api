@@ -32,12 +32,6 @@ const (
 	maxConcurrentFetches        = 8
 	maxRatioConfigBytes         = 10 << 20 // 10MB
 	floatEpsilon                = 1e-9
-	officialRatioPresetID       = -100
-	officialRatioPresetName     = "官方倍率预设"
-	officialRatioPresetBaseURL  = "https://basellm.github.io"
-	modelsDevPresetID           = -101
-	modelsDevPresetName         = "models.dev 价格预设"
-	modelsDevPresetBaseURL      = "https://models.dev"
 	modelsDevHost               = "models.dev"
 	modelsDevPath               = "/api.json"
 	modelsDevInputCostRatioBase = 1000.0
@@ -891,20 +885,6 @@ func GetSyncableChannels(c *gin.Context) {
 			})
 		}
 	}
-
-	syncableChannels = append(syncableChannels, dto.SyncableChannel{
-		ID:      officialRatioPresetID,
-		Name:    officialRatioPresetName,
-		BaseURL: officialRatioPresetBaseURL,
-		Status:  1,
-	})
-
-	syncableChannels = append(syncableChannels, dto.SyncableChannel{
-		ID:      modelsDevPresetID,
-		Name:    modelsDevPresetName,
-		BaseURL: modelsDevPresetBaseURL,
-		Status:  1,
-	})
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

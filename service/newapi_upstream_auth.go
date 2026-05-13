@@ -347,12 +347,12 @@ func applyNewAPIUpstreamAuthGroupOverride(cfg *NewAPIUpstreamAuthConfig, group s
 		return
 	}
 	cfg.Group = group
-	if isGoogleAPICNUpstreamAuthProfile(cfg.Profile) {
+	if IsGoogleAPICNUpstreamAuthProfile(cfg.Profile) {
 		cfg.TokenName = group
 	}
 }
 
-func isGoogleAPICNUpstreamAuthProfile(profile string) bool {
+func IsGoogleAPICNUpstreamAuthProfile(profile string) bool {
 	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(profile), "-", "_")) == "google_api_cn"
 }
 
