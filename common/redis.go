@@ -326,6 +326,16 @@ func RedisHSetField(key, field string, value interface{}) error {
 	return RDB.HSet(ctx, key, field, value).Err()
 }
 
+// RedisHSetFieldWithExpiry sets a single hash field and always refreshes the key TTL.
+func RedisHSetFieldWithExpiry(key, field string, value interface{}, expiration time.Duration) error {
+	ctx := context.Background()
+	txn := RDB.TxPipeline()
+	txn.HSet(ctx, key, field, value)
+	txn.Expire(ctx, key, expiration)
+	_, err := txn.Exec(ctx)
+	return err
+}
+
 func RedisHGetField(key, field string) (string, error) {
 	if DebugEnabled {
 		SysLog(fmt.Sprintf("Redis HGET field: key=%s, field=%s", key, field))

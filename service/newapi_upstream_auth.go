@@ -51,7 +51,7 @@ type newAPIUpstreamTokenCacheItem struct {
 }
 
 var (
-	newAPIUpstreamTokenCacheMu sync.Mutex
+	newAPIUpstreamTokenCacheMu sync.RWMutex
 	newAPIUpstreamTokenCache   = map[string]newAPIUpstreamTokenCacheItem{}
 )
 
@@ -185,6 +185,25 @@ func EnsureNewAPIUpstreamAuthTokensForGroups(ctx context.Context, baseURL string
 		return 0, true, errors.New("newapi upstream auth requires auth_base_url or channel base_url")
 	}
 
+	normalizedGroups := normalizeNewAPIUpstreamAuthGroups(groups, cfg.Group)
+
+	// Skip login and sync entirely if every requested token is already cached.
+	ensured := 0
+	allCached := true
+	for _, group := range normalizedGroups {
+		groupCfg := cfg
+		applyNewAPIUpstreamAuthGroupOverride(&groupCfg, group)
+		if token := getCachedNewAPIUpstreamToken(authBaseURL, groupCfg); token != "" {
+			LogNewAPIUpstreamAuthTokenDebug("ensure", baseURL, authBaseURL, groupCfg, token)
+			ensured++
+		} else {
+			allCached = false
+		}
+	}
+	if allCached {
+		return ensured, true, nil
+	}
+
 	client, err := newNewAPIUpstreamHTTPClient(proxy)
 	if err != nil {
 		return 0, true, err
@@ -202,8 +221,8 @@ func EnsureNewAPIUpstreamAuthTokensForGroups(ctx context.Context, baseURL string
 		return 0, true, err
 	}
 
-	ensured := 0
-	for _, group := range normalizeNewAPIUpstreamAuthGroups(groups, cfg.Group) {
+	ensured = 0
+	for _, group := range normalizedGroups {
 		groupCfg := cfg
 		applyNewAPIUpstreamAuthGroupOverride(&groupCfg, group)
 		if !newAPIUpstreamTokenExists(syncedTokens, groupCfg) {
@@ -274,23 +293,22 @@ func resolveNewAPIUpstreamAuthToken(ctx context.Context, baseURL string, rawKey 
 	}
 	applyNewAPIUpstreamAuthGroupOverride(&cfg, group)
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	if baseURL == "" {
-		return "", true, errors.New("newapi upstream auth requires channel base_url")
-	}
 	authBaseURL := cfg.AuthBaseURL
 	if authBaseURL == "" {
 		authBaseURL = baseURL
 	}
+	if authBaseURL == "" {
+		return "", true, errors.New("newapi upstream auth requires auth_base_url or channel base_url")
+	}
 
 	cacheKey := newAPIUpstreamAuthCacheKey(authBaseURL, cfg)
-	newAPIUpstreamTokenCacheMu.Lock()
-	if cached, exists := newAPIUpstreamTokenCache[cacheKey]; exists && time.Now().Before(cached.expiresAt) && cached.token != "" {
-		token := cached.token
-		newAPIUpstreamTokenCacheMu.Unlock()
-		LogNewAPIUpstreamAuthTokenDebug("cache", baseURL, authBaseURL, cfg, token)
-		return token, true, nil
+	newAPIUpstreamTokenCacheMu.RLock()
+	cached, exists := newAPIUpstreamTokenCache[cacheKey]
+	newAPIUpstreamTokenCacheMu.RUnlock()
+	if exists && time.Now().Before(cached.expiresAt) && cached.token != "" {
+		LogNewAPIUpstreamAuthTokenDebug("cache", baseURL, authBaseURL, cfg, cached.token)
+		return cached.token, true, nil
 	}
-	newAPIUpstreamTokenCacheMu.Unlock()
 
 	if token, ok := getNewAPIUpstreamTokenFromRedis(authBaseURL, cfg); ok {
 		setNewAPIUpstreamTokenMemoryCache(authBaseURL, cfg, token)
@@ -342,13 +360,16 @@ func setNewAPIUpstreamTokenMemoryCache(authBaseURL string, cfg NewAPIUpstreamAut
 		expiresAt: time.Now().Add(newAPIUpstreamTokenCacheTTL),
 	}
 	newAPIUpstreamTokenCacheMu.Unlock()
+
 }
 
 func setNewAPIUpstreamTokenRedisCache(authBaseURL string, cfg NewAPIUpstreamAuthConfig, token string) {
 	if strings.TrimSpace(token) == "" || !common.RedisEnabled || common.RDB == nil {
 		return
 	}
-	if err := common.RedisHSetField(newAPIUpstreamAuthRedisKey(authBaseURL, cfg), newAPIUpstreamAuthRedisField(cfg.TokenName, cfg.Group), token); err != nil {
+	key := newAPIUpstreamAuthRedisKey(authBaseURL, cfg)
+	field := newAPIUpstreamAuthRedisField(cfg.TokenName, cfg.Group)
+	if err := common.RedisHSetFieldWithExpiry(key, field, token, newAPIUpstreamTokenCacheTTL); err != nil {
 		common.SysError("set newapi upstream token redis cache failed: " + err.Error())
 	}
 }
@@ -503,6 +524,7 @@ func invalidateNewAPIUpstreamAuthToken(baseURL string, rawKey string, group stri
 		delete(newAPIUpstreamTokenCache, cacheKey)
 		invalidated = true
 	}
+
 	if (cfg.Group == "" || cfg.Group == defaultNewAPIUpstreamTokenGroup) && cfg.Group != "" {
 		fallbackCfg := cfg
 		fallbackCfg.Group = ""
@@ -663,6 +685,10 @@ func fetchNewAPIUpstreamToken(ctx context.Context, baseURL string, cfg NewAPIUps
 	}
 	tokenID := findNewAPIUpstreamTokenInItems(items, cfg.TokenName, cfg.Group)
 	if tokenID != 0 {
+		// Sync may have failed for this item (e.g. 429); check cache before retrying upstream.
+		if cached := getCachedNewAPIUpstreamToken(baseURL, cfg); cached != "" {
+			return cached, nil
+		}
 		token, err := getNewAPIUpstreamTokenKey(ctx, client, baseURL, userID, tokenID)
 		if err != nil {
 			return "", err
@@ -707,9 +733,9 @@ func syncNewAPIUpstreamTokenCatalog(ctx context.Context, client *http.Client, ba
 
 // getCachedNewAPIUpstreamToken returns a token from memory or Redis cache, empty string if not found.
 func getCachedNewAPIUpstreamToken(baseURL string, cfg NewAPIUpstreamAuthConfig) string {
-	newAPIUpstreamTokenCacheMu.Lock()
+	newAPIUpstreamTokenCacheMu.RLock()
 	cached, exists := newAPIUpstreamTokenCache[newAPIUpstreamAuthCacheKey(baseURL, cfg)]
-	newAPIUpstreamTokenCacheMu.Unlock()
+	newAPIUpstreamTokenCacheMu.RUnlock()
 	if exists && time.Now().Before(cached.expiresAt) && cached.token != "" {
 		return cached.token
 	}
