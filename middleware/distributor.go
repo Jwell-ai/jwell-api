@@ -390,7 +390,7 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	}
 	// c.Request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", key))
 	common.SetContextKey(c, constant.ContextKeyChannelKey, key)
-	common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, channel.GetBaseURL())
+	common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, resolveChannelBaseURL(channel, originalKey))
 
 	common.SetContextKey(c, constant.ContextKeySystemPromptOverride, false)
 
@@ -414,6 +414,18 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 		c.Set("bot_id", channel.Other)
 	}
 	return nil
+}
+
+// resolveChannelBaseURL returns the channel's configured base URL, falling back
+// to auth_base_url from a newapi_login key when the channel's own base_url is empty.
+func resolveChannelBaseURL(channel *model.Channel, rawKey string) string {
+	if url := channel.GetBaseURL(); url != "" {
+		return url
+	}
+	if cfg, ok, err := service.ParseNewAPIUpstreamAuthConfig(rawKey); ok && err == nil && cfg.AuthBaseURL != "" {
+		return cfg.AuthBaseURL
+	}
+	return ""
 }
 
 func getSelectedChannelUsingGroup(c *gin.Context) string {
