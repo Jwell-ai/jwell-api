@@ -50,8 +50,10 @@ type googleAPICNBootstrapConfig struct {
 }
 
 type googleAPICNModelInfo struct {
-	Name   string
-	Groups []string
+	Name            string
+	Groups          []string
+	ModelRatio      float64 // 0 means not extracted from pricing data
+	CompletionRatio float64 // 0 means not extracted from pricing data
 }
 
 // StartGoogleAPICNBootstrapTask creates or updates the shared google-api.cn
@@ -271,7 +273,7 @@ func createGoogleAPICNChannel(ctx context.Context, cfg googleAPICNBootstrapConfi
 	if err := ensureGoogleAPICNUpstreamAuthTokens(ctx, &channel, key, cfg); err != nil {
 		return err
 	}
-	if err := ensureGoogleAPICNModelRatios(models, cfg); err != nil {
+	if err := ensureGoogleAPICNModelRatios(modelInfos, cfg); err != nil {
 		return err
 	}
 	if err := ensureGoogleAPICNModelMetas(models); err != nil {
@@ -334,17 +336,24 @@ func syncGoogleAPICNChannel(ctx context.Context, channel *model.Channel, cfg goo
 
 	models := googleAPICNModelInfoNames(modelInfos)
 	upstreamModelGroups := googleAPICNModelInfoGroups(modelInfos, cfg.UpstreamTokenGroup)
-	mergedModels := mergeModelNames(googleAPICNFilterModelNames(channel.GetModels()), models)
-	mergedUpstreamModelGroups := googleAPICNMergeModelGroups(mergedModels, upstreamModelGroups, cfg.UpstreamTokenGroup)
+	// Use the upstream model list as the authoritative source.
+	// mergeModelNames (union) would accumulate stale models indefinitely when the
+	// upstream removes them; instead, fall back to the existing list only when the
+	// upstream returned nothing (fetch failure already handled above).
+	authoritative := models
+	if len(authoritative) == 0 {
+		authoritative = googleAPICNFilterModelNames(channel.GetModels())
+	}
+	mergedUpstreamModelGroups := googleAPICNMergeModelGroups(authoritative, upstreamModelGroups, cfg.UpstreamTokenGroup)
 	setGoogleAPICNUpstreamModelGroups(channel, mergedUpstreamModelGroups)
-	modelsChanged := strings.Join(normalizeModelNames(channel.GetModels()), ",") != strings.Join(mergedModels, ",")
-	channel.Models = strings.Join(mergedModels, ",")
+	modelsChanged := strings.Join(normalizeModelNames(channel.GetModels()), ",") != strings.Join(authoritative, ",")
+	channel.Models = strings.Join(authoritative, ",")
 	if shouldOwnChannelKey {
 		if err := ensureGoogleAPICNUpstreamAuthTokens(ctx, channel, key, cfg); err != nil {
 			return err
 		}
 	}
-	if err := ensureGoogleAPICNModelRatios(models, cfg); err != nil {
+	if err := ensureGoogleAPICNModelRatios(modelInfos, cfg); err != nil {
 		return err
 	}
 	if err := ensureGoogleAPICNModelMetas(models); err != nil {
@@ -609,17 +618,34 @@ func googleAPICNNormalizeGroups(groups []string, fallbackGroup string) []string 
 	return normalized
 }
 
-func ensureGoogleAPICNModelRatios(models []string, cfg googleAPICNBootstrapConfig) error {
-	if !cfg.AutoRegisterModelRatio {
+func ensureGoogleAPICNModelRatios(modelInfos []googleAPICNModelInfo, cfg googleAPICNBootstrapConfig) error {
+	if !cfg.AutoRegisterModelRatio || len(modelInfos) == 0 {
 		return nil
 	}
-	modelRatios, added := mergeGoogleAPICNModelRatios(
-		ratio_setting.GetModelRatioCopy(),
-		ratio_setting.GetModelPriceCopy(),
-		models,
-		cfg.DefaultModelRatio,
-	)
-	if added == 0 {
+	existingRatios := ratio_setting.GetModelRatioCopy()
+	existingPrices := ratio_setting.GetModelPriceCopy()
+
+	// Build set of upstream model keys for stale-entry detection.
+	upstreamKeys := make(map[string]struct{}, len(modelInfos))
+	for _, info := range modelInfos {
+		if name := strings.TrimSpace(info.Name); name != "" {
+			upstreamKeys[ratio_setting.FormatMatchingModelName(name)] = struct{}{}
+		}
+	}
+
+	modelRatios, added := mergeGoogleAPICNModelRatios(existingRatios, existingPrices, modelInfos, cfg.DefaultModelRatio)
+
+	// Remove ratios that carry the default placeholder value (37.5) and are no
+	// longer in the upstream model list — these are stale auto-registered entries.
+	removed := 0
+	for key, ratio := range modelRatios {
+		if _, inUpstream := upstreamKeys[key]; !inUpstream && ratio == googleAPICNDefaultModelRatio {
+			delete(modelRatios, key)
+			removed++
+		}
+	}
+
+	if added == 0 && removed == 0 {
 		return nil
 	}
 	data, err := common.Marshal(modelRatios)
@@ -630,7 +656,7 @@ func ensureGoogleAPICNModelRatios(models []string, cfg googleAPICNBootstrapConfi
 		return err
 	}
 	ratio_setting.InvalidateExposedDataCache()
-	common.SysLog(fmt.Sprintf("google-api.cn model ratios registered: added=%d ratio=%.4f", added, cfg.DefaultModelRatio))
+	common.SysLog(fmt.Sprintf("google-api.cn model ratios: added=%d removed=%d ratio=%.4f", added, removed, cfg.DefaultModelRatio))
 	return nil
 }
 
@@ -639,7 +665,7 @@ func ensureGoogleAPICNModelRatiosForChannel(channel *model.Channel, models []str
 	if !ok || !googleAPICNConfigMatchesChannel(channel, cfg) {
 		return nil
 	}
-	return ensureGoogleAPICNModelRatios(models, cfg)
+	return ensureGoogleAPICNModelRatios(googleAPICNModelInfosFromNames(models, cfg.UpstreamTokenGroup), cfg)
 }
 
 func ensureGoogleAPICNModelMetas(models []string) error {
@@ -877,21 +903,29 @@ func googleAPICNConfigMatchesChannel(channel *model.Channel, cfg googleAPICNBoot
 		channelBaseURL == cfg.AuthBaseURL
 }
 
-func mergeGoogleAPICNModelRatios(existingRatios map[string]float64, existingPrices map[string]float64, models []string, defaultRatio float64) (map[string]float64, int) {
-	merged := make(map[string]float64, len(existingRatios)+len(models))
+func mergeGoogleAPICNModelRatios(existingRatios map[string]float64, existingPrices map[string]float64, modelInfos []googleAPICNModelInfo, defaultRatio float64) (map[string]float64, int) {
+	merged := make(map[string]float64, len(existingRatios)+len(modelInfos))
 	for modelName, ratio := range existingRatios {
 		merged[modelName] = ratio
 	}
 	added := 0
-	for _, modelName := range normalizeModelNames(models) {
-		ratioKey := ratio_setting.FormatMatchingModelName(modelName)
+	for _, info := range modelInfos {
+		name := strings.TrimSpace(info.Name)
+		if name == "" {
+			continue
+		}
+		ratioKey := ratio_setting.FormatMatchingModelName(name)
 		if _, ok := existingPrices[ratioKey]; ok {
 			continue
 		}
 		if _, ok := merged[ratioKey]; ok {
 			continue
 		}
-		merged[ratioKey] = defaultRatio
+		ratio := defaultRatio
+		if info.ModelRatio > 0 {
+			ratio = info.ModelRatio
+		}
+		merged[ratioKey] = ratio
 		added++
 	}
 	return merged, added
@@ -1055,7 +1089,9 @@ func collectGoogleAPICNPricingModelInfos(value any, inheritedGroups []string) []
 			if len(groups) == 0 {
 				groups = inheritedGroups
 			}
-			return []googleAPICNModelInfo{{Name: modelName, Groups: groups}}
+			info := googleAPICNModelInfo{Name: modelName, Groups: groups}
+			info.ModelRatio, info.CompletionRatio = googleAPICNPricingModelRatioFromMap(typed)
+			return []googleAPICNModelInfo{info}
 		}
 		models := make([]googleAPICNModelInfo, 0)
 		for key, nested := range typed {
@@ -1072,6 +1108,24 @@ func collectGoogleAPICNPricingModelInfos(value any, inheritedGroups []string) []
 	default:
 		return nil
 	}
+}
+
+// googleAPICNPricingModelRatioFromMap extracts model_ratio and completion_ratio
+// from a pricing entry. Returns (0, 0) when no ratio data is present.
+func googleAPICNPricingModelRatioFromMap(item map[string]any) (modelRatio float64, completionRatio float64) {
+	for _, key := range []string{"model_ratio", "ratio", "input_ratio"} {
+		if v, ok := item[key].(float64); ok && v > 0 {
+			modelRatio = v
+			break
+		}
+	}
+	for _, key := range []string{"completion_ratio", "output_ratio"} {
+		if v, ok := item[key].(float64); ok && v > 0 {
+			completionRatio = v
+			break
+		}
+	}
+	return
 }
 
 func googleAPICNPricingModelNameFromMap(item map[string]any) (string, bool) {
