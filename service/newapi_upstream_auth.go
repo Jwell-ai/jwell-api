@@ -24,7 +24,7 @@ const (
 	NewAPIUpstreamAuthType          = "newapi_login"
 	defaultNewAPIUpstreamTokenName  = "jwell-api-upstream"
 	defaultNewAPIUpstreamTokenGroup = "default"
-	newAPIUpstreamTokenCacheTTL     = 30 * time.Minute
+	newAPIUpstreamTokenCacheTTL     = 7 * 24 * time.Hour
 	newAPIUpstreamAuthDebugEnv      = "NEWAPI_UPSTREAM_AUTH_DEBUG"
 	googleAPICNAuthDebugEnv         = "GOOGLE_API_CN_DEBUG_AUTH_TOKEN"
 	newAPIUpstreamTokenRedisPrefix  = "newapi:upstream_auth:token"
@@ -683,19 +683,41 @@ func syncNewAPIUpstreamTokenCatalog(ctx context.Context, client *http.Client, ba
 	}
 	tokens := make(map[string]string, len(items))
 	for _, item := range items {
-		token, err := getNewAPIUpstreamTokenKey(ctx, client, baseURL, userID, item.ID)
-		if err != nil {
-			common.SysError(fmt.Sprintf("newapi upstream token sync skipped: token_name=%s group=%s err=%s", item.Name, strings.TrimSpace(item.Group), err.Error()))
-			continue
-		}
 		itemCfg := cfg
 		itemCfg.TokenName = strings.TrimSpace(item.Name)
 		itemCfg.Group = strings.TrimSpace(item.Group)
 		field := newAPIUpstreamAuthRedisField(itemCfg.TokenName, itemCfg.Group)
+
+		// Use cached token if available — skip upstream call to avoid unnecessary 429s.
+		if token := getCachedNewAPIUpstreamToken(baseURL, itemCfg); token != "" {
+			tokens[field] = token
+			continue
+		}
+
+		token, err := getNewAPIUpstreamTokenKey(ctx, client, baseURL, userID, item.ID)
+		if err != nil {
+			common.SysError(fmt.Sprintf("newapi upstream token sync skipped: token_name=%s group=%s err=%s", item.Name, itemCfg.Group, err.Error()))
+			continue
+		}
 		tokens[field] = token
 		setNewAPIUpstreamTokenCache(baseURL, itemCfg, token)
 	}
 	return tokens, items, nil
+}
+
+// getCachedNewAPIUpstreamToken returns a token from memory or Redis cache, empty string if not found.
+func getCachedNewAPIUpstreamToken(baseURL string, cfg NewAPIUpstreamAuthConfig) string {
+	newAPIUpstreamTokenCacheMu.Lock()
+	cached, exists := newAPIUpstreamTokenCache[newAPIUpstreamAuthCacheKey(baseURL, cfg)]
+	newAPIUpstreamTokenCacheMu.Unlock()
+	if exists && time.Now().Before(cached.expiresAt) && cached.token != "" {
+		return cached.token
+	}
+	if token, ok := getNewAPIUpstreamTokenFromRedis(baseURL, cfg); ok {
+		setNewAPIUpstreamTokenMemoryCache(baseURL, cfg, token)
+		return token
+	}
+	return ""
 }
 
 func listNewAPIUpstreamTokens(ctx context.Context, client *http.Client, baseURL string, userID int) ([]newAPITokenItem, error) {
