@@ -253,6 +253,17 @@ func ResolveUpstreamAuthGroupForModel(settings dto.ChannelOtherSettings, modelNa
 		}
 	}
 
+	// If the platform group itself is one of the model's upstream groups, prefer it
+	// over the first entry so a gpt-image user gets gpt-image, not default.
+	if platformGroup != "" {
+		for _, group := range modelGroups {
+			if strings.TrimSpace(group) == platformGroup {
+				logNewAPIUpstreamAuthGroupDecision(modelName, platformGroup, mappedGroup, modelGroups, platformGroup, "platform_group_direct")
+				return platformGroup
+			}
+		}
+	}
+
 	for _, group := range modelGroups {
 		if group = strings.TrimSpace(group); group != "" {
 			logNewAPIUpstreamAuthGroupDecision(modelName, platformGroup, mappedGroup, modelGroups, group, "model_metadata_fallback")
