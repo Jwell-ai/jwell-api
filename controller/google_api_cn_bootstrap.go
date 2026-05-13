@@ -42,7 +42,8 @@ type googleAPICNBootstrapConfig struct {
 	Tag                    string
 	Group                  string
 	UpstreamTokenGroup     string
-	UpstreamGroupMapping   map[string]string
+	UpstreamGroupMapping         map[string]string
+	UpstreamGroupMappingExplicit bool // true when user explicitly configured the mapping (not a computed default)
 	BootstrapModels        []string
 	AutoRegisterModelRatio bool
 	DefaultModelRatio      float64
@@ -156,7 +157,8 @@ func loadGoogleAPICNBootstrapConfig() (googleAPICNBootstrapConfig, bool) {
 		Tag:                    strings.TrimSpace(upstreamSetting.ChannelTag),
 		Group:                  strings.TrimSpace(upstreamSetting.ChannelGroup),
 		UpstreamTokenGroup:     strings.TrimSpace(upstreamSetting.Group),
-		UpstreamGroupMapping:   parseGoogleAPICNGroupMapping(upstreamSetting.GroupMapping),
+		UpstreamGroupMapping:         parseGoogleAPICNGroupMapping(upstreamSetting.GroupMapping),
+		UpstreamGroupMappingExplicit: strings.TrimSpace(upstreamSetting.GroupMapping) != "",
 		BootstrapModels:        normalizeModelNames(strings.Split(upstreamSetting.BootstrapModels, ",")),
 		AutoRegisterModelRatio: upstreamSetting.AutoRegisterModelRatio,
 		DefaultModelRatio:      normalizeGoogleAPICNDefaultModelRatio(upstreamSetting.DefaultModelRatio),
@@ -309,15 +311,25 @@ func syncGoogleAPICNChannel(ctx context.Context, channel *model.Channel, cfg goo
 		channel.Name = cfg.Name
 	}
 	setGoogleAPICNUpstreamModelSettings(channel)
-	setGoogleAPICNUpstreamGroupMapping(channel, cfg.UpstreamGroupMapping)
 
-	modelInfos, err := fetchGoogleAPICNModelInfos(ctx, channel, cfg)
+	pricingResult, modelInfos, err := fetchGoogleAPICNPricingResultAndModelInfos(ctx, channel, cfg)
 	if err != nil {
 		modelInfos = googleAPICNModelInfosFromNames(cfg.BootstrapModels, cfg.UpstreamTokenGroup)
 		if len(modelInfos) == 0 {
 			return fmt.Errorf("fetch upstream models failed and GOOGLE_API_CN_BOOTSTRAP_MODELS is empty: %w", err)
 		}
 		common.SysError("google-api.cn model fetch failed, using GOOGLE_API_CN_BOOTSTRAP_MODELS: " + err.Error())
+	}
+
+	// Apply group mapping: explicit config wins; otherwise auto-sync from usable_group in the
+	// upstream pricing API; fall back to default only when the channel has no mapping yet.
+	switch {
+	case cfg.UpstreamGroupMappingExplicit:
+		setGoogleAPICNUpstreamGroupMapping(channel, cfg.UpstreamGroupMapping)
+	case len(pricingResult.UsableGroups) > 0:
+		setGoogleAPICNUpstreamGroupMapping(channel, pricingResult.UsableGroups)
+	case len(channel.GetOtherSettings().UpstreamGroupMapping) == 0:
+		setGoogleAPICNUpstreamGroupMapping(channel, cfg.UpstreamGroupMapping)
 	}
 
 	models := googleAPICNModelInfoNames(modelInfos)
@@ -468,19 +480,24 @@ func syncGoogleAPICNChannelUpstreamGroupsFromPricing(ctx context.Context, channe
 }
 
 func fetchGoogleAPICNModelInfos(ctx context.Context, channel *model.Channel, cfg googleAPICNBootstrapConfig) ([]googleAPICNModelInfo, error) {
+	_, modelInfos, err := fetchGoogleAPICNPricingResultAndModelInfos(ctx, channel, cfg)
+	return modelInfos, err
+}
+
+func fetchGoogleAPICNPricingResultAndModelInfos(ctx context.Context, channel *model.Channel, cfg googleAPICNBootstrapConfig) (googleAPICNPricingResult, []googleAPICNModelInfo, error) {
 	if googleAPICNConfigMatchesChannel(channel, cfg) {
-		modelInfos, err := fetchGoogleAPICNPricingModelInfos(ctx, cfg, channel.GetSetting().Proxy)
+		result, err := fetchGoogleAPICNPricingResult(ctx, cfg, channel.GetSetting().Proxy)
 		if err == nil {
-			return modelInfos, nil
+			return result, result.ModelInfos, nil
 		}
 		common.SysError("google-api.cn pricing model fetch failed, falling back to API models: " + err.Error())
 	}
 
 	models, err := fetchGoogleAPICNModels(ctx, channel)
 	if err != nil {
-		return nil, err
+		return googleAPICNPricingResult{}, nil, err
 	}
-	return googleAPICNModelInfosFromNames(models, cfg.UpstreamTokenGroup), nil
+	return googleAPICNPricingResult{}, googleAPICNModelInfosFromNames(models, cfg.UpstreamTokenGroup), nil
 }
 
 func googleAPICNModelInfosFromNames(models []string, fallbackGroup string) []googleAPICNModelInfo {
@@ -918,27 +935,84 @@ func fetchGoogleAPICNPricingModels(ctx context.Context, cfg googleAPICNBootstrap
 	return googleAPICNModelInfoNames(modelInfos), nil
 }
 
-func fetchGoogleAPICNPricingModelInfos(ctx context.Context, cfg googleAPICNBootstrapConfig, proxy string) ([]googleAPICNModelInfo, error) {
+type googleAPICNPricingResult struct {
+	ModelInfos   []googleAPICNModelInfo
+	UsableGroups map[string]string // upstream group name → upstream group name (identity, from usable_group)
+}
+
+func fetchGoogleAPICNPricingResult(ctx context.Context, cfg googleAPICNBootstrapConfig, proxy string) (googleAPICNPricingResult, error) {
 	if strings.TrimSpace(cfg.PricingURL) == "" {
-		return nil, errors.New("google-api.cn pricing url is empty")
+		return googleAPICNPricingResult{}, errors.New("google-api.cn pricing url is empty")
 	}
 	body, err := getResponseBodyWithContext(ctx, http.MethodGet, cfg.PricingURL, proxy, http.Header{
 		"Accept": []string{"application/json"},
 	})
 	if err != nil {
-		return nil, err
+		return googleAPICNPricingResult{}, err
 	}
 	modelInfos, err := parseGoogleAPICNPricingModelInfos(body)
 	if err != nil {
-		return nil, err
+		return googleAPICNPricingResult{}, err
 	}
 	if len(modelInfos) == 0 {
-		return nil, fmt.Errorf("google-api.cn pricing returned no models: %s", cfg.PricingURL)
+		return googleAPICNPricingResult{}, fmt.Errorf("google-api.cn pricing returned no models: %s", cfg.PricingURL)
 	}
 	for i := range modelInfos {
 		modelInfos[i].Groups = googleAPICNNormalizeGroups(modelInfos[i].Groups, cfg.UpstreamTokenGroup)
 	}
-	return modelInfos, nil
+	return googleAPICNPricingResult{
+		ModelInfos:   modelInfos,
+		UsableGroups: parseGoogleAPICNPricingUsableGroups(body),
+	}, nil
+}
+
+func fetchGoogleAPICNPricingModelInfos(ctx context.Context, cfg googleAPICNBootstrapConfig, proxy string) ([]googleAPICNModelInfo, error) {
+	result, err := fetchGoogleAPICNPricingResult(ctx, cfg, proxy)
+	return result.ModelInfos, err
+}
+
+// parseGoogleAPICNPricingUsableGroups extracts the usable_group field from the
+// upstream /api/pricing response (checked at root level and under "data") and
+// returns an identity map of upstream group name → upstream group name.
+func parseGoogleAPICNPricingUsableGroups(body []byte) map[string]string {
+	var payload map[string]any
+	if err := common.Unmarshal(body, &payload); err != nil {
+		return nil
+	}
+	// Try root-level usable_group first, then data.usable_group
+	if groups := extractGoogleAPICNUsableGroupMap(payload["usable_group"]); len(groups) > 0 {
+		return groups
+	}
+	if data, ok := payload["data"].(map[string]any); ok {
+		if groups := extractGoogleAPICNUsableGroupMap(data["usable_group"]); len(groups) > 0 {
+			return groups
+		}
+	}
+	return nil
+}
+
+func extractGoogleAPICNUsableGroupMap(value any) map[string]string {
+	switch typed := value.(type) {
+	case map[string]any:
+		result := make(map[string]string, len(typed))
+		for k := range typed {
+			if k = strings.TrimSpace(k); k != "" {
+				result[k] = k
+			}
+		}
+		return result
+	case []any:
+		result := make(map[string]string, len(typed))
+		for _, item := range typed {
+			if s, ok := item.(string); ok {
+				if s = strings.TrimSpace(s); s != "" {
+					result[s] = s
+				}
+			}
+		}
+		return result
+	}
+	return nil
 }
 
 func parseGoogleAPICNPricingModels(body []byte) ([]string, error) {
