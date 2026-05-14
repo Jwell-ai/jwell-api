@@ -2,6 +2,7 @@ package controller
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"slices"
@@ -321,6 +322,13 @@ func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 	}
 	key = strings.TrimSpace(key)
 
+	// If the key is a newapi_login config (JSON), the upstream is a new-api instance.
+	// Use /api/pricing instead of /v1/models — it is public (no auth needed) and
+	// returns ALL models across all groups, not just the ones the token can access.
+	if models, ok := tryFetchNewAPIUpstreamModels(baseURL, key, channel); ok {
+		return models, nil
+	}
+
 	headers, err := buildFetchModelsHeaders(channel, key)
 	if err != nil {
 		return nil, err
@@ -344,6 +352,72 @@ func fetchChannelUpstreamModelIDs(channel *model.Channel) ([]string, error) {
 	})
 
 	return normalizeModelNames(ids), nil
+}
+
+// tryFetchNewAPIUpstreamModels detects whether the channel key is a newapi_login
+// config (i.e. the upstream is another new-api instance) and, if so, fetches the
+// model list from /api/pricing which is public and returns all models regardless
+// of group. Returns (models, true) on success, (nil, false) to fall through to
+// the standard /v1/models path.
+func tryFetchNewAPIUpstreamModels(baseURL, key string, channel *model.Channel) ([]string, bool) {
+	// newapi_login keys are JSON objects starting with '{'
+	if !strings.HasPrefix(strings.TrimSpace(key), "{") {
+		return nil, false
+	}
+	if baseURL == "" {
+		return nil, false
+	}
+	pricingURL := strings.TrimRight(baseURL, "/") + "/api/pricing"
+
+	req, err := http.NewRequest(http.MethodGet, pricingURL, nil)
+	if err != nil {
+		return nil, false
+	}
+	req.Header.Set("Accept", "application/json")
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		common.SysLog(fmt.Sprintf("newapi upstream pricing fetch failed: %v", err))
+		return nil, false
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, false
+	}
+
+	models, err := parseNewAPIPricingModelNames(body)
+	if err != nil || len(models) == 0 {
+		return nil, false
+	}
+	return normalizeModelNames(models), true
+}
+
+// parseNewAPIPricingModelNames extracts model names from a new-api /api/pricing response.
+func parseNewAPIPricingModelNames(body []byte) ([]string, error) {
+	var resp struct {
+		Success bool `json:"success"`
+		Data    []struct {
+			ModelName string `json:"model_name"`
+			Name      string `json:"name"`
+		} `json:"data"`
+	}
+	if err := common.Unmarshal(body, &resp); err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(resp.Data))
+	for _, item := range resp.Data {
+		name := item.ModelName
+		if name == "" {
+			name = item.Name
+		}
+		if name = strings.TrimSpace(name); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names, nil
 }
 
 func updateChannelUpstreamModelSettings(channel *model.Channel, settings dto.ChannelOtherSettings, updateModels bool) error {
