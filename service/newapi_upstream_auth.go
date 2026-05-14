@@ -707,6 +707,23 @@ func fetchNewAPIUpstreamToken(ctx context.Context, baseURL string, cfg NewAPIUps
 		setNewAPIUpstreamTokenCache(baseURL, cfg, token)
 		return token, nil
 	}
+
+	// Group not found on upstream — fall back to the default group using the
+	// already-synced catalog (no extra network call needed).
+	if cfg.Group != "" && cfg.Group != defaultNewAPIUpstreamTokenGroup {
+		fallbackCfg := cfg
+		fallbackCfg.Group = defaultNewAPIUpstreamTokenGroup
+		if IsGoogleAPICNUpstreamAuthProfile(fallbackCfg.Profile) {
+			fallbackCfg.TokenName = defaultNewAPIUpstreamTokenGroup
+		}
+		if token, ok := getNewAPIUpstreamTokenFromCatalog(tokens, fallbackCfg); ok {
+			common.SysLog(fmt.Sprintf("newapi upstream: group %q not found, falling back to default", cfg.Group))
+			// Cache under the original group key so the next request is instant.
+			setNewAPIUpstreamTokenCache(baseURL, cfg, token)
+			return token, nil
+		}
+	}
+
 	if cfg.Group != "" {
 		return "", fmt.Errorf("newapi upstream token %q group %q not found", cfg.TokenName, cfg.Group)
 	}
