@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"embed"
 	"fmt"
 	"log"
 	"net/http"
@@ -34,18 +33,6 @@ import (
 
 	_ "net/http/pprof"
 )
-
-//go:embed web/default/dist
-var buildFS embed.FS
-
-//go:embed web/default/dist/index.html
-var indexPage []byte
-
-//go:embed web/classic/dist
-var classicBuildFS embed.FS
-
-//go:embed web/classic/dist/index.html
-var classicIndexPage []byte
 
 func main() {
 	startTime := time.Now()
