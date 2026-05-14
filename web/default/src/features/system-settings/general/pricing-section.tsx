@@ -19,8 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 import * as z from 'zod'
 import type { Resolver } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { RotateCcw } from 'lucide-react'
+import { RotateCcw, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { useState } from 'react'
+import { toast } from 'sonner'
 import { DEFAULT_CURRENCY_CONFIG } from '@/stores/system-config-store'
 import { Button } from '@/components/ui/button'
 import {
@@ -97,6 +99,25 @@ type PricingSectionProps = {
 export function PricingSection({ defaultValues }: PricingSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const [syncingRate, setSyncingRate] = useState(false)
+
+  const handleSyncExchangeRate = async () => {
+    setSyncingRate(true)
+    try {
+      const res = await fetch('/api/option/sync_exchange_rate', { method: 'POST' })
+      const data = await res.json()
+      if (data.success) {
+        toast.success(t('Exchange rate synced: 1 USD = {{rate}} {{currency}}', { rate: data.rate.toFixed(4), currency: data.currency }))
+        form.setValue('USDExchangeRate', data.rate, { shouldDirty: false })
+      } else {
+        toast.error(data.message)
+      }
+    } catch (e: any) {
+      toast.error(e?.message ?? 'sync failed')
+    } finally {
+      setSyncingRate(false)
+    }
+  }
 
   const pricingSchema = createPricingSchema(t)
 
@@ -233,15 +254,27 @@ export function PricingSection({ defaultValues }: PricingSectionProps) {
                           : t('USD Exchange Rate')}
                     </FormLabel>
                     <FormControl>
-                      <Input
-                        type='number'
-                        step='0.01'
-                        value={field.value as number}
-                        onChange={(e) => field.onChange(e.target.valueAsNumber)}
-                        name={field.name}
-                        onBlur={field.onBlur}
-                        ref={field.ref}
-                      />
+                      <div className='flex gap-2'>
+                        <Input
+                          type='number'
+                          step='0.01'
+                          value={field.value as number}
+                          onChange={(e) => field.onChange(e.target.valueAsNumber)}
+                          name={field.name}
+                          onBlur={field.onBlur}
+                          ref={field.ref}
+                        />
+                        <Button
+                          type='button'
+                          variant='outline'
+                          size='icon'
+                          title={t('Sync from market')}
+                          disabled={syncingRate}
+                          onClick={handleSyncExchangeRate}
+                        >
+                          <RefreshCw className={`h-4 w-4 ${syncingRate ? 'animate-spin' : ''}`} />
+                        </Button>
+                      </div>
                     </FormControl>
                     <FormDescription>
                       {t(
