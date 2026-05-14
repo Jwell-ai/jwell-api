@@ -180,23 +180,31 @@ func FetchUpstreamRatios(c *gin.Context) {
 				return
 			}
 
-			// OpenRouter requires Bearer token auth
-			if isOpenRouter && chItem.ID != 0 {
+			// For channel-based syncs, pass the channel key so the upstream
+			// returns group-specific pricing (not unauthenticated default prices).
+			if chItem.ID != 0 {
 				dbCh, err := model.GetChannelById(chItem.ID, true)
 				if err != nil {
 					ch <- upstreamResult{Name: uniqueName, Err: "failed to get channel key: " + err.Error()}
 					return
 				}
-				key, _, apiErr := dbCh.GetNextEnabledKey()
-				if apiErr != nil {
-					ch <- upstreamResult{Name: uniqueName, Err: "failed to get enabled channel key: " + apiErr.Error()}
+				if isOpenRouter && dbCh == nil {
+					ch <- upstreamResult{Name: uniqueName, Err: "OpenRouter requires a valid channel with API key"}
 					return
 				}
-				if strings.TrimSpace(key) == "" {
-					ch <- upstreamResult{Name: uniqueName, Err: "no API key configured for this channel"}
-					return
+				if dbCh != nil {
+					key, _, apiErr := dbCh.GetNextEnabledKey()
+					if apiErr != nil && isOpenRouter {
+						ch <- upstreamResult{Name: uniqueName, Err: "failed to get enabled channel key: " + apiErr.Error()}
+						return
+					}
+					if key = strings.TrimSpace(key); key != "" {
+						httpReq.Header.Set("Authorization", "Bearer "+key)
+					} else if isOpenRouter {
+						ch <- upstreamResult{Name: uniqueName, Err: "no API key configured for this channel"}
+						return
+					}
 				}
-				httpReq.Header.Set("Authorization", "Bearer "+strings.TrimSpace(key))
 			} else if isOpenRouter {
 				ch <- upstreamResult{Name: uniqueName, Err: "OpenRouter requires a valid channel with API key"}
 				return
