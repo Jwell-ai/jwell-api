@@ -320,7 +320,7 @@ func syncGoogleAPICNChannel(ctx context.Context, channel *model.Channel, cfg goo
 	}
 	setGoogleAPICNUpstreamModelSettings(channel)
 
-	pricingResult, modelInfos, err := fetchGoogleAPICNPricingResultAndModelInfos(ctx, channel, cfg)
+	_, modelInfos, err := fetchGoogleAPICNPricingResultAndModelInfos(ctx, channel, cfg)
 	if err != nil {
 		modelInfos = googleAPICNModelInfosFromNames(cfg.BootstrapModels, cfg.UpstreamTokenGroup)
 		if len(modelInfos) == 0 {
@@ -329,15 +329,15 @@ func syncGoogleAPICNChannel(ctx context.Context, channel *model.Channel, cfg goo
 		common.SysError("google-api.cn model fetch failed, using GOOGLE_API_CN_BOOTSTRAP_MODELS: " + err.Error())
 	}
 
-	// Apply group mapping: explicit config wins; otherwise auto-sync from usable_group in the
-	// upstream pricing API; fall back to default only when the channel has no mapping yet.
-	switch {
-	case cfg.UpstreamGroupMappingExplicit:
+	// UpstreamGroupMapping is for EXPLICIT redirects (e.g. "vip" → "gpt-image").
+	// Do NOT auto-populate from usable_group — identity mappings like
+	// {"default":"default"} would bypass model_metadata_fallback and lock every
+	// default-group user to the "default" upstream token regardless of the model.
+	if cfg.UpstreamGroupMappingExplicit {
 		setGoogleAPICNUpstreamGroupMapping(channel, cfg.UpstreamGroupMapping)
-	case len(pricingResult.UsableGroups) > 0:
-		setGoogleAPICNUpstreamGroupMapping(channel, pricingResult.UsableGroups)
-	case len(channel.GetOtherSettings().UpstreamGroupMapping) == 0:
-		setGoogleAPICNUpstreamGroupMapping(channel, cfg.UpstreamGroupMapping)
+	} else {
+		// Clear any stale auto-synced identity mapping left over from previous runs.
+		setGoogleAPICNUpstreamGroupMapping(channel, nil)
 	}
 
 	models := googleAPICNModelInfoNames(modelInfos)
