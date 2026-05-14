@@ -503,7 +503,11 @@ func fetchGoogleAPICNPricingResultAndModelInfos(ctx context.Context, channel *mo
 	if googleAPICNConfigMatchesChannel(channel, cfg) {
 		result, err := fetchGoogleAPICNPricingResult(ctx, cfg, channel.GetSetting().Proxy)
 		if err == nil {
-			return result, result.ModelInfos, nil
+			// Strip entries whose name matches a usable_group key — the upstream
+			// sometimes lists token group names (e.g. "claude-aws", "gpt-image")
+			// as model entries, but they are routing aliases, not real models.
+			modelInfos := filterOutGroupNames(result.ModelInfos, result.UsableGroups)
+			return result, modelInfos, nil
 		}
 		common.SysError("google-api.cn pricing model fetch failed, falling back to API models: " + err.Error())
 	}
@@ -513,6 +517,21 @@ func fetchGoogleAPICNPricingResultAndModelInfos(ctx context.Context, channel *mo
 		return googleAPICNPricingResult{}, nil, err
 	}
 	return googleAPICNPricingResult{}, googleAPICNModelInfosFromNames(models, cfg.UpstreamTokenGroup), nil
+}
+
+// filterOutGroupNames removes model infos whose name appears in the usableGroups
+// map (these are upstream token group names, not real model names).
+func filterOutGroupNames(infos []googleAPICNModelInfo, usableGroups map[string]string) []googleAPICNModelInfo {
+	if len(usableGroups) == 0 {
+		return infos
+	}
+	filtered := make([]googleAPICNModelInfo, 0, len(infos))
+	for _, info := range infos {
+		if _, isGroup := usableGroups[strings.TrimSpace(info.Name)]; !isGroup {
+			filtered = append(filtered, info)
+		}
+	}
+	return filtered
 }
 
 func googleAPICNModelInfosFromNames(models []string, fallbackGroup string) []googleAPICNModelInfo {
