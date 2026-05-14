@@ -270,6 +270,15 @@ func ResolveUpstreamAuthGroupForModel(settings dto.ChannelOtherSettings, modelNa
 			return group
 		}
 	}
+
+	// model_groups is empty (bootstrap hasn't run for this model yet) — use the
+	// platform group directly as a best-effort fallback so the request can still
+	// be routed instead of falling back to the default group token.
+	if platformGroup != "" {
+		logNewAPIUpstreamAuthGroupDecision(modelName, platformGroup, mappedGroup, modelGroups, platformGroup, "platform_group_fallback")
+		return platformGroup
+	}
+
 	logNewAPIUpstreamAuthGroupDecision(modelName, platformGroup, mappedGroup, modelGroups, "", "empty")
 	return ""
 }

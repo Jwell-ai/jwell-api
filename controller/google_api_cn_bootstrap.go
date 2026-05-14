@@ -520,18 +520,31 @@ func fetchGoogleAPICNPricingResultAndModelInfos(ctx context.Context, channel *mo
 }
 
 // filterOutGroupNames removes model infos whose name appears in the usableGroups
-// map (these are upstream token group names, not real model names).
+// map AND looks like a pure group identifier (no digits). Model names such as
+// "gpt-image-2" or "claude-3-5-sonnet" contain digits and must not be filtered
+// even when a same-named platform group exists on the upstream.
 func filterOutGroupNames(infos []googleAPICNModelInfo, usableGroups map[string]string) []googleAPICNModelInfo {
 	if len(usableGroups) == 0 {
 		return infos
 	}
 	filtered := make([]googleAPICNModelInfo, 0, len(infos))
 	for _, info := range infos {
-		if _, isGroup := usableGroups[strings.TrimSpace(info.Name)]; !isGroup {
-			filtered = append(filtered, info)
+		name := strings.TrimSpace(info.Name)
+		if _, isGroup := usableGroups[name]; isGroup && !googleAPICNNameContainsDigit(name) {
+			continue
 		}
+		filtered = append(filtered, info)
 	}
 	return filtered
+}
+
+func googleAPICNNameContainsDigit(s string) bool {
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			return true
+		}
+	}
+	return false
 }
 
 func googleAPICNModelInfosFromNames(models []string, fallbackGroup string) []googleAPICNModelInfo {
