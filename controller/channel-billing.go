@@ -437,6 +437,16 @@ func updateChannelBalance(channel *model.Channel) (float64, error) {
 	return balance, nil
 }
 
+func RefreshGoogleAPICNGroupMapping(c *gin.Context) {
+	cfg, ok := loadGoogleAPICNBootstrapConfig()
+	if !ok {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "google-api.cn upstream not configured"})
+		return
+	}
+	fastClearGoogleAPICNUpstreamGroupMapping(cfg)
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "upstream group mapping cleared"})
+}
+
 func GetGoogleAPICNUpstreamAccount(c *gin.Context) {
 	cfg, ok := loadGoogleAPICNBootstrapConfig()
 	if !ok {

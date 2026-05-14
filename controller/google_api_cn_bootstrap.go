@@ -78,6 +78,9 @@ func StartGoogleAPICNBootstrapTask() {
 	// pointing at auth_base_url. This prevents "no base URL configured" errors
 	// during the window while the full async bootstrap is still running.
 	fastPatchGoogleAPICNChannelBaseURL(cfg)
+	// Synchronously clear stale UpstreamGroupMapping so model_metadata_fallback
+	// routes correctly from the first request, before the async bootstrap finishes.
+	fastClearGoogleAPICNUpstreamGroupMapping(cfg)
 
 	go func() {
 		timeoutSeconds := upstreamSetting.BootstrapTimeoutSeconds
@@ -120,6 +123,32 @@ func fastPatchGoogleAPICNChannelBaseURL(cfg googleAPICNBootstrapConfig) {
 		return
 	}
 	common.SysLog(fmt.Sprintf("google-api.cn: patched channel #%d base_url to %s", channel.Id, cfg.BaseURL))
+	refreshChannelRuntimeCache()
+}
+
+// fastClearGoogleAPICNUpstreamGroupMapping synchronously removes any stale
+// auto-synced UpstreamGroupMapping from the channel so that model_metadata_fallback
+// routes correctly on the very first request after restart, before the async
+// bootstrap goroutine completes.
+func fastClearGoogleAPICNUpstreamGroupMapping(cfg googleAPICNBootstrapConfig) {
+	if cfg.Tag == "" {
+		return
+	}
+	var channel model.Channel
+	if err := model.DB.Where("tag = ?", cfg.Tag).Order("id asc").First(&channel).Error; err != nil {
+		return
+	}
+	settings := channel.GetOtherSettings()
+	if len(settings.UpstreamGroupMapping) == 0 {
+		return // already clear
+	}
+	settings.UpstreamGroupMapping = nil
+	channel.SetOtherSettings(settings)
+	if err := model.DB.Model(&channel).Update("settings", channel.OtherSettings).Error; err != nil {
+		common.SysError(fmt.Sprintf("google-api.cn: failed to clear upstream group mapping: %s", err.Error()))
+		return
+	}
+	common.SysLog(fmt.Sprintf("google-api.cn: cleared stale upstream group mapping on channel #%d", channel.Id))
 	refreshChannelRuntimeCache()
 }
 
