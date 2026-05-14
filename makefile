@@ -1,35 +1,51 @@
-FRONTEND_DIR = ./web/default
-FRONTEND_CLASSIC_DIR = ./web/classic
+FRONTEND_DIR = ./web
 BACKEND_DIR = .
+OUTPUT = new-api
+REGISTRY  := registry.digitalocean.com/alphart/alphart
+IMAGE_NAME := jwell-api
+VERSION   := $(shell cat VERSION | tr -d '[:space:]' | sed 's/^v//')
 
-.PHONY: all build-frontend build-frontend-classic build-all-frontends start-backend dev dev-api dev-web dev-web-classic
+.PHONY: all build-frontend build-backend build-backend-embedded \
+        docker-build docker-push docker-release docker-release-minor docker-release-major
 
-all: build-all-frontends start-backend
+all: build-frontend build-backend-embedded
 
 build-frontend:
-	@echo "Building default frontend..."
-	@cd $(FRONTEND_DIR) && bun install && DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$(cat ../../VERSION) bun run build
+	@echo "Building frontend..."
+	@cd $(FRONTEND_DIR) && bun install && DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$$(cat ../VERSION) bun run build
 
-build-frontend-classic:
-	@echo "Building classic frontend..."
-	@cd $(FRONTEND_CLASSIC_DIR) && bun install && VITE_REACT_APP_VERSION=$(cat ../../VERSION) bun run build
+build-backend:
+	@echo "Building backend..."
+	@cd $(BACKEND_DIR) && go build -ldflags "-s -w -X 'github.com/Jwell-ai/jwell-api/common.Version=$$(cat VERSION)'" -o $(OUTPUT)
 
-build-all-frontends: build-frontend build-frontend-classic
+build-backend-embedded:
+	@echo "Building backend with embedded frontend..."
+	@cd $(BACKEND_DIR) && go build -tags embed_frontend -ldflags "-s -w -X 'github.com/Jwell-ai/jwell-api/common.Version=$$(cat VERSION)'" -o $(OUTPUT)
 
-start-backend:
-	@echo "Starting backend dev server..."
-	@cd $(BACKEND_DIR) && go run main.go &
+docker-build:
+	@GOEXPERIMENT=greenteagc CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+		go build \
+		-ldflags "-s -w -extldflags '-static' -X 'github.com/Jwell-ai/jwell-api/common.Version=$(VERSION)'" \
+		-o $(OUTPUT)
+	@sudo -E docker build --platform linux/amd64 \
+		-t $(REGISTRY):$(IMAGE_NAME)-$(VERSION) \
+		-t $(REGISTRY):$(IMAGE_NAME)-latest \
+		.
+	@echo "Built $(REGISTRY):$(IMAGE_NAME)-$(VERSION)"
 
-dev-api:
-	@echo "Starting backend services (docker)..."
-	@docker compose -f docker-compose.dev.yml up -d
+docker-push:
+	@sudo -E docker push $(REGISTRY):$(IMAGE_NAME)-$(VERSION)
+	@sudo -E docker push $(REGISTRY):$(IMAGE_NAME)-latest
+	@echo "Pushed $(REGISTRY):$(IMAGE_NAME)-$(VERSION)"
 
-dev-web:
-	@echo "Starting frontend dev server..."
-	@cd $(FRONTEND_DIR) && bun install && bun run dev
+docker-release:
+	@chmod +x scripts/docker-release.sh
+	@./scripts/docker-release.sh patch
 
-dev-web-classic:
-	@echo "Starting classic frontend dev server..."
-	@cd $(FRONTEND_CLASSIC_DIR) && bun install && bun run dev
+docker-release-minor:
+	@chmod +x scripts/docker-release.sh
+	@./scripts/docker-release.sh minor
 
-dev: dev-api dev-web
+docker-release-major:
+	@chmod +x scripts/docker-release.sh
+	@./scripts/docker-release.sh major
