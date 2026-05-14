@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -210,7 +211,7 @@ func loadGoogleAPICNBootstrapConfig() (googleAPICNBootstrapConfig, bool) {
 		Group:                  strings.TrimSpace(upstreamSetting.ChannelGroup),
 		UpstreamTokenGroup:     strings.TrimSpace(upstreamSetting.Group),
 		UpstreamGroupMapping:         parseGoogleAPICNGroupMapping(upstreamSetting.GroupMapping),
-		UpstreamGroupMappingExplicit: strings.TrimSpace(upstreamSetting.GroupMapping) != "",
+		UpstreamGroupMappingExplicit: strings.TrimSpace(os.Getenv("GOOGLE_API_CN_GROUP_MAPPING")) != "",
 		BootstrapModels:        normalizeModelNames(strings.Split(upstreamSetting.BootstrapModels, ",")),
 		AutoRegisterModelRatio: upstreamSetting.AutoRegisterModelRatio,
 		DefaultModelRatio:      normalizeGoogleAPICNDefaultModelRatio(upstreamSetting.DefaultModelRatio),
