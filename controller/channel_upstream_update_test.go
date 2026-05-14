@@ -39,7 +39,12 @@ func TestMergeGoogleAPICNModelRatiosAddsOnlyMissingModels(t *testing.T) {
 		map[string]float64{
 			"priced-model": 0.1,
 		},
-		[]string{"gpt-4o", "priced-model", "new-upstream-model", " new-upstream-model "},
+		[]googleAPICNModelInfo{
+			{Name: "gpt-4o"},
+			{Name: "priced-model"},
+			{Name: "new-upstream-model"},
+			{Name: " new-upstream-model "}, // duplicate with whitespace
+		},
 		37.5,
 	)
 
