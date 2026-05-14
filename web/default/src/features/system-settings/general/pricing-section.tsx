@@ -23,6 +23,7 @@ import { RotateCcw, RefreshCw } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { api } from '@/lib/api'
 import { DEFAULT_CURRENCY_CONFIG } from '@/stores/system-config-store'
 import { Button } from '@/components/ui/button'
 import {
@@ -104,8 +105,7 @@ export function PricingSection({ defaultValues }: PricingSectionProps) {
   const handleSyncExchangeRate = async () => {
     setSyncingRate(true)
     try {
-      const res = await fetch('/api/option/sync_exchange_rate', { method: 'POST' })
-      const data = await res.json()
+      const { data } = await api.post('/api/option/sync_exchange_rate')
       if (data.success) {
         toast.success(t('Exchange rate synced: 1 USD = {{rate}} {{currency}}', { rate: data.rate.toFixed(4), currency: data.currency }))
         form.setValue('USDExchangeRate', data.rate, { shouldDirty: false })
