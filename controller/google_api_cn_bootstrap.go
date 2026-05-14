@@ -97,15 +97,22 @@ func StartGoogleAPICNBootstrapTask() {
 }
 
 // fastPatchGoogleAPICNChannelBaseURL synchronously ensures any channel identified
-// by cfg.Tag has base_url set to cfg.BaseURL if it is currently empty or still
-// pointing at the auth base URL. Called before the async bootstrap goroutine so
-// relay requests don't fail with "no base URL configured" at startup.
+// by cfg.Tag (or base_url, for channels created before tags were introduced) has
+// base_url set to cfg.BaseURL if it is currently empty or still pointing at the
+// auth base URL. Called before the async bootstrap goroutine so relay requests
+// don't fail with "no base URL configured" at startup.
 func fastPatchGoogleAPICNChannelBaseURL(cfg googleAPICNBootstrapConfig) {
-	if cfg.BaseURL == "" || cfg.Tag == "" {
+	if cfg.BaseURL == "" {
 		return
 	}
 	var channel model.Channel
-	if err := model.DB.Where("tag = ?", cfg.Tag).Order("id asc").First(&channel).Error; err != nil {
+	q := model.DB.Order("id asc")
+	if cfg.Tag != "" {
+		q = q.Where("tag = ? OR base_url = ? OR base_url = ?", cfg.Tag, cfg.BaseURL, cfg.AuthBaseURL)
+	} else {
+		q = q.Where("base_url = ? OR base_url = ?", cfg.BaseURL, cfg.AuthBaseURL)
+	}
+	if err := q.First(&channel).Error; err != nil {
 		return // channel not yet created; the async bootstrap will create it
 	}
 	// Use the raw DB field, not GetBaseURL(), which now falls back to the type
@@ -130,17 +137,25 @@ func fastPatchGoogleAPICNChannelBaseURL(cfg googleAPICNBootstrapConfig) {
 // auto-synced UpstreamGroupMapping from the channel so that model_metadata_fallback
 // routes correctly on the very first request after restart, before the async
 // bootstrap goroutine completes.
+// Uses the same multi-field lookup as ensureGoogleAPICNChannel so it finds the
+// channel even when the tag column is NULL (channels created before tags were added).
 func fastClearGoogleAPICNUpstreamGroupMapping(cfg googleAPICNBootstrapConfig) {
-	if cfg.Tag == "" {
+	var channel model.Channel
+	q := model.DB.Order("id asc")
+	if cfg.Tag != "" {
+		q = q.Where("tag = ? OR base_url = ? OR base_url = ?", cfg.Tag, cfg.BaseURL, cfg.AuthBaseURL)
+	} else if cfg.BaseURL != "" || cfg.AuthBaseURL != "" {
+		q = q.Where("base_url = ? OR base_url = ?", cfg.BaseURL, cfg.AuthBaseURL)
+	} else {
 		return
 	}
-	var channel model.Channel
-	if err := model.DB.Where("tag = ?", cfg.Tag).Order("id asc").First(&channel).Error; err != nil {
+	if err := q.First(&channel).Error; err != nil {
 		return
 	}
 	settings := channel.GetOtherSettings()
 	if len(settings.UpstreamGroupMapping) == 0 {
-		return // already clear
+		common.SysLog(fmt.Sprintf("google-api.cn: upstream group mapping already clear on channel #%d", channel.Id))
+		return
 	}
 	settings.UpstreamGroupMapping = nil
 	channel.SetOtherSettings(settings)
@@ -224,11 +239,6 @@ func normalizeGoogleAPICNBootstrapConfig(cfg googleAPICNBootstrapConfig) googleA
 	if cfg.PricingURL == "" {
 		cfg.PricingURL = cfg.AuthBaseURL + "/api/pricing"
 	}
-	if len(cfg.UpstreamGroupMapping) == 0 {
-		cfg.UpstreamGroupMapping = map[string]string{
-			cfg.Group: cfg.UpstreamTokenGroup,
-		}
-	}
 	return cfg
 }
 
@@ -291,7 +301,11 @@ func createGoogleAPICNChannel(ctx context.Context, cfg googleAPICNBootstrapConfi
 		Tag:         common.GetPointer(cfg.Tag),
 	}
 	setGoogleAPICNUpstreamModelSettings(&channel)
-	setGoogleAPICNUpstreamGroupMapping(&channel, cfg.UpstreamGroupMapping)
+	// Only set explicit user-configured group redirects; never auto-populate identity
+	// mappings like {"default":"default"} that bypass model_metadata_fallback.
+	if cfg.UpstreamGroupMappingExplicit {
+		setGoogleAPICNUpstreamGroupMapping(&channel, cfg.UpstreamGroupMapping)
+	}
 
 	modelInfos, err := fetchGoogleAPICNModelInfos(ctx, &channel, cfg)
 	if err != nil {
@@ -512,7 +526,11 @@ func syncGoogleAPICNChannelUpstreamGroupsFromPricing(ctx context.Context, channe
 		channel.Models = strings.Join(cleanedModels, ",")
 	}
 	upstreamModelGroups := googleAPICNMergeModelGroups(cleanedModels, googleAPICNModelInfoGroups(modelInfos, cfg.UpstreamTokenGroup), cfg.UpstreamTokenGroup)
-	setGoogleAPICNUpstreamGroupMapping(channel, cfg.UpstreamGroupMapping)
+	if cfg.UpstreamGroupMappingExplicit {
+		setGoogleAPICNUpstreamGroupMapping(channel, cfg.UpstreamGroupMapping)
+	} else {
+		setGoogleAPICNUpstreamGroupMapping(channel, nil)
+	}
 	setGoogleAPICNUpstreamModelGroups(channel, upstreamModelGroups)
 	updates := map[string]interface{}{
 		"settings": channel.OtherSettings,
