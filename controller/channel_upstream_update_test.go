@@ -46,6 +46,7 @@ func TestMergeGoogleAPICNModelRatiosAddsOnlyMissingModels(t *testing.T) {
 			{Name: " new-upstream-model "}, // duplicate with whitespace
 		},
 		37.5,
+		false,
 	)
 
 	require.Equal(t, 1, added)

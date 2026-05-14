@@ -768,6 +768,11 @@ func syncNewAPIUpstreamTokenCatalog(ctx context.Context, client *http.Client, ba
 	return tokens, items, nil
 }
 
+// GetCachedNewAPIUpstreamToken returns a token from memory or Redis cache, empty string if not found.
+func GetCachedNewAPIUpstreamToken(baseURL string, cfg NewAPIUpstreamAuthConfig) string {
+	return getCachedNewAPIUpstreamToken(baseURL, cfg)
+}
+
 // getCachedNewAPIUpstreamToken returns a token from memory or Redis cache, empty string if not found.
 func getCachedNewAPIUpstreamToken(baseURL string, cfg NewAPIUpstreamAuthConfig) string {
 	newAPIUpstreamTokenCacheMu.RLock()

@@ -730,11 +730,14 @@ func syncGoogleAPICNPricing(modelInfos []googleAPICNModelInfo, cfg googleAPICNBo
 	}
 
 	// --- ModelRatio ---
+	// overwrite=true when doing a full sync so stale ratios from the first
+	// unauthenticated bootstrap get corrected to the actual upstream group price.
 	modelRatios, ratioAdded := mergeGoogleAPICNModelRatios(
 		ratio_setting.GetModelRatioCopy(),
 		ratio_setting.GetModelPriceCopy(),
 		modelInfos,
 		cfg.DefaultModelRatio,
+		fullSync,
 	)
 	ratioRemoved := 0
 	if fullSync {
@@ -1073,7 +1076,11 @@ func googleAPICNConfigMatchesChannel(channel *model.Channel, cfg googleAPICNBoot
 		channelBaseURL == cfg.AuthBaseURL
 }
 
-func mergeGoogleAPICNModelRatios(existingRatios map[string]float64, existingPrices map[string]float64, modelInfos []googleAPICNModelInfo, defaultRatio float64) (map[string]float64, int) {
+// mergeGoogleAPICNModelRatios merges upstream model ratios into the existing map.
+// When overwrite=true (full sync with a real upstream token) existing ratios are
+// updated to the upstream value, so the stored price reflects what is actually
+// charged rather than the stale value from the first unauthenticated bootstrap.
+func mergeGoogleAPICNModelRatios(existingRatios map[string]float64, existingPrices map[string]float64, modelInfos []googleAPICNModelInfo, defaultRatio float64, overwrite bool) (map[string]float64, int) {
 	merged := make(map[string]float64, len(existingRatios)+len(modelInfos))
 	for modelName, ratio := range existingRatios {
 		merged[modelName] = ratio
@@ -1086,17 +1093,19 @@ func mergeGoogleAPICNModelRatios(existingRatios map[string]float64, existingPric
 		}
 		ratioKey := ratio_setting.FormatMatchingModelName(name)
 		if _, ok := existingPrices[ratioKey]; ok {
-			continue
+			continue // price-based model — don't store a ratio
 		}
-		if _, ok := merged[ratioKey]; ok {
-			continue
-		}
-		ratio := defaultRatio
+		upstreamRatio := defaultRatio
 		if info.ModelRatio > 0 {
-			ratio = info.ModelRatio
+			upstreamRatio = info.ModelRatio
 		}
-		merged[ratioKey] = ratio
-		added++
+		if existing, ok := merged[ratioKey]; !ok {
+			merged[ratioKey] = upstreamRatio
+			added++
+		} else if overwrite && upstreamRatio != existing {
+			merged[ratioKey] = upstreamRatio
+			added++ // counts as changed
+		}
 	}
 	return merged, added
 }
@@ -1144,13 +1153,34 @@ type googleAPICNPricingResult struct {
 	UsableGroups map[string]string // upstream group name → upstream group name (identity, from usable_group)
 }
 
+// getCachedNewAPIUpstreamTokenForPricing returns a cached upstream token for
+// cfg.UpstreamTokenGroup without making any network calls. Returns ("", false)
+// when no cached token exists — caller should fall back to unauthenticated fetch.
+func getCachedNewAPIUpstreamTokenForPricing(_ context.Context, cfg googleAPICNBootstrapConfig, _ string) (string, bool) {
+	authCfg := service.NewAPIUpstreamAuthConfig{
+		Type:        service.NewAPIUpstreamAuthType,
+		Profile:     "google_api_cn",
+		AuthBaseURL: cfg.AuthBaseURL,
+		Group:       cfg.UpstreamTokenGroup,
+		TokenName:   cfg.UpstreamTokenGroup,
+	}
+	token := service.GetCachedNewAPIUpstreamToken(cfg.AuthBaseURL, authCfg)
+	return token, token != ""
+}
+
 func fetchGoogleAPICNPricingResult(ctx context.Context, cfg googleAPICNBootstrapConfig, proxy string) (googleAPICNPricingResult, error) {
 	if strings.TrimSpace(cfg.PricingURL) == "" {
 		return googleAPICNPricingResult{}, errors.New("google-api.cn pricing url is empty")
 	}
-	body, err := getResponseBodyWithContext(ctx, http.MethodGet, cfg.PricingURL, proxy, http.Header{
-		"Accept": []string{"application/json"},
-	})
+	headers := http.Header{"Accept": []string{"application/json"}}
+	// Fetch pricing as the upstream token group so the upstream applies the correct
+	// group ratio before returning prices. Without auth, the upstream returns the
+	// unauthenticated (default) group prices, which differ from the rate we are
+	// actually charged when using a premium group token (e.g. gemini-official).
+	if token, ok := getCachedNewAPIUpstreamTokenForPricing(ctx, cfg, proxy); ok && token != "" {
+		headers["Authorization"] = []string{"Bearer " + token}
+	}
+	body, err := getResponseBodyWithContext(ctx, http.MethodGet, cfg.PricingURL, proxy, headers)
 	if err != nil {
 		return googleAPICNPricingResult{}, err
 	}
