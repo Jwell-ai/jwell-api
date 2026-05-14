@@ -9,28 +9,17 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// applyGroupRatioToPricing multiplies each model's ModelRatio and ModelPrice by
-// the effective group ratio for that model. The group ratio is determined by the
-// first of the model's enable_groups that appears in groupRatio. This bakes the
-// multiplier into the returned pricing so the frontend shows effective prices
-// without needing to know about group ratios separately.
-func applyGroupRatioToPricing(pricing []model.Pricing, groupRatio map[string]float64) []model.Pricing {
-	if len(groupRatio) == 0 {
+// applyGroupRatioToPricing multiplies every model's pricing fields by gr
+// (the viewer's effective group ratio). Using a single ratio avoids the
+// non-deterministic ordering of model.EnableGroup (a set whose iteration
+// order is random), which caused per-model group lookup to pick the wrong
+// ratio depending on map iteration order.
+func applyGroupRatioToPricing(pricing []model.Pricing, gr float64) []model.Pricing {
+	if gr == 1.0 || gr <= 0 {
 		return pricing
 	}
 	result := make([]model.Pricing, len(pricing))
 	for i, item := range pricing {
-		gr := 1.0
-		for _, g := range item.EnableGroup {
-			if r, ok := groupRatio[g]; ok && r > 0 {
-				gr = r
-				break
-			}
-		}
-		if gr == 1.0 {
-			result[i] = item
-			continue
-		}
 		p := item
 		p.ModelRatio *= gr
 		p.ModelPrice *= gr
@@ -110,9 +99,20 @@ func GetPricing(c *gin.Context) {
 		}
 	}
 
-	// Bake group ratio into model pricing so the frontend shows effective prices.
-	pricing = applyGroupRatioToPricing(pricing, groupRatio)
-	// Report all group ratios as 1 — they are already reflected in the prices above.
+	// Determine the viewer's effective group ratio.
+	// Use the user's own group; fall back to "default" for anonymous visitors.
+	viewerGroup := group
+	if viewerGroup == "" {
+		viewerGroup = "default"
+	}
+	effectiveRatio, ok := groupRatio[viewerGroup]
+	if !ok || effectiveRatio <= 0 {
+		effectiveRatio = 1.0
+	}
+
+	// Bake the ratio into model pricing so the frontend shows effective prices.
+	pricing = applyGroupRatioToPricing(pricing, effectiveRatio)
+	// Report all group ratios as 1 — already reflected in the prices above.
 	flatGroupRatio := make(map[string]float64, len(groupRatio))
 	for g := range groupRatio {
 		flatGroupRatio[g] = 1.0
