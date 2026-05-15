@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -151,6 +152,9 @@ func GetResponseBody(method, url string, channel *model.Channel, headers http.He
 	res, err := client.Do(req)
 	if err != nil {
 		return nil, err
+	}
+	if res.StatusCode == http.StatusForbidden || res.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("upstream does not support balance query (status %d)", res.StatusCode)
 	}
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("status code: %d", res.StatusCode)
@@ -365,6 +369,10 @@ func updateChannelBalance(channel *model.Channel) (float64, error) {
 	case constant.ChannelTypeOpenAI:
 		if channel.GetBaseURL() != "" {
 			baseURL = channel.GetBaseURL()
+		}
+		// new-api upstreams (key is a JSON config) don't expose OpenAI billing endpoints.
+		if key := strings.TrimSpace(channel.Key); strings.HasPrefix(key, "{") {
+			return -1, errors.New("余额查询不支持此上游类型，请在上游平台查看")
 		}
 	case constant.ChannelTypeAzure:
 		return 0, errors.New("尚未实现")
