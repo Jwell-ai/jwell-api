@@ -40,11 +40,12 @@ build-backend-embedded:
 all: build-frontend build-backend-embedded
 
 # ── Docker ────────────────────────────────────────────────────────────────────
-# docker-build assumes frontend is already built (run build-frontend first if needed)
+# docker-build: backend-only binary (no embedded frontend).
+# Frontend is deployed separately via web/deploy.sh.
 docker-build:
-	@echo "Building Go binary for linux/amd64..."
+	@echo "Building Go binary for linux/amd64 (no embedded frontend)..."
 	@GOEXPERIMENT=greenteagc CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-		go build -tags embed_frontend \
+		go build \
 		-ldflags "-s -w -extldflags '-static' -X '$(MODULE)/common.Version=$(VERSION)'" \
 		-o $(OUTPUT)
 	@sudo -E docker build --platform linux/amd64 \
